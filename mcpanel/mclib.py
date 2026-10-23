@@ -139,7 +139,7 @@ def _installed():
 
 def _save_installed(recs):
     _write_json(_addons_path(INSTALLED_FILE), {
-        "_comment": "Managed by `mcpanel mclib` — which addons came from which library/release.",
+        "_comment": "Managed by `mcpanel mclib` - which addons came from which library/release.",
         "addons": recs,
     })
 
@@ -343,7 +343,7 @@ def _remove_folder(folder):
 
 def _disclaimer_doc(tos=None):
     return fail("disclaimer_required",
-                "Installing third-party addons requires accepting the disclaimer — "
+                "Installing third-party addons requires accepting the disclaimer - "
                 "rerun with --yes to accept it.",
                 disclaimer=DISCLAIMER, tos=tos)
 
@@ -353,7 +353,7 @@ def _refused(confirm, tos):
     callers (so a UI can show it), a short note when a human just said no."""
     if confirm is None:
         return _disclaimer_doc(tos)
-    return fail("disclaimer_declined", "Cancelled — the third-party disclaimer was not accepted.")
+    return fail("disclaimer_declined", "Cancelled - the third-party disclaimer was not accepted.")
 
 
 def _require_disclaimer(args, confirm, tos):
@@ -452,7 +452,7 @@ def _do_install(args, confirm, mode):
     current = recs.get(key)
 
     if mode in ("update", "downgrade") and current is None:
-        raise CLIError("mclib_not_installed", f"'{entry['name']}' is not installed from a library — install it first.")
+        raise CLIError("mclib_not_installed", f"'{entry['name']}' is not installed from a library - install it first.")
 
     # Disclaimer before ANY request to the addon's own repository.
     if not _require_disclaimer(args, confirm, tos):
@@ -486,11 +486,11 @@ def _do_install(args, confirm, mode):
         if cur_idx is not None and tgt_idx is not None:
             if mode == "update" and tgt_idx > cur_idx:
                 raise CLIError("invalid_arguments",
-                               f"{target['version']} is older than the installed {current['version']} — "
+                               f"{target['version']} is older than the installed {current['version']} - "
                                "use downgrade.")
             if mode == "downgrade" and tgt_idx < cur_idx:
                 raise CLIError("invalid_arguments",
-                               f"{target['version']} is newer than the installed {current['version']} — "
+                               f"{target['version']} is newer than the installed {current['version']} - "
                                "use update.")
     return _install_release(key, entry, library, target, previous=current)
 
@@ -560,18 +560,9 @@ def run(args, confirm=None):
 
 
 def _interactive_confirm(text):
-    import textwrap
-    print()
-    print("  ⚠  THIRD-PARTY SOFTWARE")
-    for para in text.split("\n"):
-        for line in textwrap.wrap(para, 76) or [""]:
-            print("  " + line)
-    print()
-    try:
-        answer = input("  Accept and continue? [y/N] ").strip().lower()
-    except EOFError:
-        return False
-    return answer in ("y", "yes")
+    # `y` covers the next 15 minutes, `a` hides the disclaimer for good.
+    from . import disclaimers
+    return disclaimers.ask("addons", text)
 
 
 def cmd_mclib(args, progress=None):
@@ -611,7 +602,7 @@ def render_mclib(result, args):
             print(r.dim(result["description"]))
         print()
         for a in result.get("addons", []):
-            products = ", ".join(PRODUCT_NAMES.get(p, p) for p in a["products"]) or "—"
+            products = ", ".join(PRODUCT_NAMES.get(p, p) for p in a["products"]) or "-"
             inst = r.green(f"  ✓ installed {a['installedVersion']}") if a.get("installedVersion") else ""
             print(r.bold(a["name"]) + inst)
             if a["description"]:
@@ -655,8 +646,8 @@ def render_mclib(result, args):
         print(r.green("✓ ") + f"{result['name']} {verb}" + r.dim(f"  → addons/{result.get('folder')}"))
         state = (result.get("addon") or {}).get("status")
         if state and state != "loaded":
-            print(r.yellow(f"  ⚠ installed, but the addon reports '{state}' — see: mcpanel addons info {result.get('folder')}"))
+            print(r.yellow(f"  ⚠ installed, but the addon reports '{state}' - see: mcpanel addons info {result.get('folder')}"))
         products = [p for p in result.get("products", []) if p != "cli"]
         if products:
             print(r.dim("  For " + ", ".join(PRODUCT_NAMES[p] for p in products)
-                        + " — runs inside MCPanel-CLI; restart the app/WebUI to pick it up."))
+                        + " - runs inside MCPanel-CLI; restart the app/WebUI to pick it up."))

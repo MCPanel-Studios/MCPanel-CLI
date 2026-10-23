@@ -374,11 +374,16 @@ class _Helpers:
 
 class AddonAPI:
     """Passed to an addon's `register()`. One instance per parser tree, so it is
-    constructed twice per process — once for the human tree and once for `api`."""
+    constructed twice per process — once for the human tree and once for `api`.
 
-    def __init__(self, sub, record):
+    `machine` says which: True while mounting into `mcpanel api …` (JSON, what
+    the apps call), False for the commands people type. An addon that only
+    backs a UI can skip the human tree with `if not api.machine: return`."""
+
+    def __init__(self, sub, record, machine=False):
         self._sub = sub
         self._record = record
+        self.machine = machine
         self.helpers = _Helpers()
 
     # ── commands ──
@@ -387,7 +392,7 @@ class AddonAPI:
         existing = getattr(target, "_name_parser_map", {})
         if name in existing:
             raise ValueError(
-                "command group '{}' already exists — pick another name".format(name))
+                "command group '{}' already exists - pick another name".format(name))
         p = target.add_parser(name, help=help)
         return p.add_subparsers(dest="noun", metavar="<command>", required=True)
 
@@ -421,14 +426,15 @@ class AddonAPI:
         return d
 
 
-def register_all(sub):
+def register_all(sub, machine=False):
     """Mounts every loaded addon's commands into one parser tree. Called by
-    cli.add_commands() at the end of the built-ins, once per tree."""
+    cli.add_commands() at the end of the built-ins, once per tree; `machine`
+    is True for the `api` tree."""
     for rec in load():
         if rec.status != ST_LOADED or rec.module is None:
             continue
         try:
-            rec.module.register(AddonAPI(sub, rec))
+            rec.module.register(AddonAPI(sub, rec, machine))
         except BaseException:
             rec.status = ST_ERROR
             rec.error = traceback.format_exc()
@@ -514,7 +520,7 @@ def cmd_list(args=None, progress=None):
         return {
             "addons": [],
             "loaded": False,
-            "reason": "MCPANEL_NO_ADDONS is set — addon loading is disabled",
+            "reason": "MCPANEL_NO_ADDONS is set - addon loading is disabled",
         }
     return {"addons": [r.to_dict() for r in load()], "loaded": True}
 
@@ -587,7 +593,7 @@ def _find_addon_root(path, depth=0):
     if len(packages) == 1:
         return packages[0]
     if len(packages) > 1:
-        raise ValueError("found several Python packages ({}) — point at the addon's own "
+        raise ValueError("found several Python packages ({}) - point at the addon's own "
                          "package folder instead".format(", ".join(os.path.basename(p) for p in packages)))
     dirs = [os.path.join(path, e) for e in entries if os.path.isdir(os.path.join(path, e))]
     if depth == 0 and len(dirs) == 1:
@@ -685,7 +691,7 @@ def cmd_remove(args, progress=None):
         return fail("addon_not_found", "No addon named '{}'".format(args.name))
     if rec.source != "user":
         return fail("addon_not_removable",
-                    "'{}' is a {} addon — it is not installed in {} and cannot be "
+                    "'{}' is a {} addon - it is not installed in {} and cannot be "
                     "removed this way. Disable it instead: mcpanel addons disable {}".format(
                         rec.name, rec.source, paths.ADDONS_DIR, rec.name))
     try:

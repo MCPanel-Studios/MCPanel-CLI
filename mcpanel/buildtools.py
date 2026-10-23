@@ -258,7 +258,7 @@ def build_spigot(version, server_dir, progress=None, java_path=None):
                 progress(3, f"Auto-selected JDK {rng[0]}–{rng[1]} for Spigot {version}: {match}")
     java = java or java_path or shutil.which("java")
     if not java:
-        return fail("java_not_found", "Java not found on PATH — BuildTools requires a JDK to compile Spigot")
+        return fail("java_not_found", "Java not found on PATH - BuildTools requires a JDK to compile Spigot")
 
     # Fail fast and clearly rather than let a JRE-only install (no javac —
     # common on Fedora/Debian/Ubuntu, which split the compiler into a
@@ -276,7 +276,7 @@ def build_spigot(version, server_dir, progress=None, java_path=None):
             range_hint = ""
             example_major = 21
         return fail("jdk_no_compiler", (
-            f"'{java}' has no compiler (javac) — it looks like a JRE, not a full JDK{range_hint}. "
+            f"'{java}' has no compiler (javac) - it looks like a JRE, not a full JDK{range_hint}. "
             "BuildTools needs a full JDK to compile Spigot. On Fedora/RHEL install the matching "
             f"'-devel' package (e.g. `sudo dnf install java-{example_major}-openjdk-devel`); on "
             f"Debian/Ubuntu install a JDK package (e.g. `sudo apt install openjdk-{example_major}-jdk`)."

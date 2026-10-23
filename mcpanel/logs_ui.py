@@ -411,7 +411,7 @@ def _print_tree_plain(nodes, indent=0):
 
 
 def _run_plain(title, builder):
-    print(render.dim(f"— {title} —"))
+    print(render.dim(f"- {title} -"))
     print(render.dim("  (install prompt_toolkit for the interactive log browser)\n"))
     tree = builder()
     if not tree:
@@ -432,12 +432,12 @@ def _run(title, builder):
         app.run()
     finally:
         state["stop"] = True
-    print(render.dim("— log browser closed —"))
+    print(render.dim("- log browser closed -"))
 
 
 def run_server_log_browser(server_id, server_dir, server_name=None):
     logs_dir = os.path.join(server_dir, "logs")
-    title = f"Logs — {server_name or server_id}"
+    title = f"Logs - {server_name or server_id}"
     _run(title, lambda: _build_dir_tree(logs_dir, logs_dir))
 
 

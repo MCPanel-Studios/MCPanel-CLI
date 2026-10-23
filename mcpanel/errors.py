@@ -36,10 +36,10 @@ CATALOG = {
     "server_not_found": "Server not found.",
     "server_already_registered": "That folder is already registered as a server.",
     "server_dir_missing": "The server's folder is missing.",
-    "server_running": "The server is running — stop it first.",
+    "server_running": "The server is running - stop it first.",
     "server_not_running": "The server is not running.",
     "server_already_running": "The server is already running.",
-    "still_stopping": "The previous instance is still shutting down — try again in a moment.",
+    "still_stopping": "The previous instance is still shutting down - try again in a moment.",
     "start_failed": "The server failed to start.",
     "start_timeout": "Timed out waiting for the server to start.",
     "stop_failed": "The server could not be stopped.",
@@ -48,7 +48,7 @@ CATALOG = {
     "jar_not_found": "No usable server jar was found.",
     "invalid_name": "A name is required.",
     "invalid_port": "The port must be between 1 and 65535.",
-    "invalid_ram": "The RAM value is not valid — use megabytes (2048) or e.g. 4G.",
+    "invalid_ram": "The RAM value is not valid - use megabytes (2048) or e.g. 4G.",
     "invalid_software": "Unknown server software.",
     "version_required": "A version is required.",
     "unknown_version": "That version is not available.",
@@ -63,12 +63,14 @@ CATALOG = {
     "velocity_not_found": "Velocity server not found.",
     "not_velocity": "The target is not a Velocity server.",
     "invalid_target": "A server cannot be linked to itself.",
-    "velocity_toml_missing": "velocity.toml not found — start Velocity once to generate it.",
+    "velocity_toml_missing": "velocity.toml not found - start Velocity once to generate it.",
     "secret_missing": "The Velocity forwarding secret could not be read.",
     "invalid_server_name": "The proxy server name may only contain letters, digits, '-' and '_'.",
     "invalid_address": "The address must look like host:port.",
     "proxy_config_invalid": "A proxy config file could not be understood; nothing was changed.",
     "proxy_link_failed": "Linking to the proxy failed; changes were rolled back.",
+    "not_linked": "This server is not linked to a Velocity proxy.",
+    "proxy_unlink_failed": "Unlinking from the proxy failed; changes were rolled back.",
 
     # ── backups ──────────────────────────────────────────────────────────────
     "backup_not_found": "Backup not found.",
@@ -77,16 +79,23 @@ CATALOG = {
     "backup_failed": "The backup could not be created.",
     "restore_failed": "The backup could not be restored.",
 
+    # ── databases ────────────────────────────────────────────────────────────
+    "db_error": "The database reported an error.",
+    "table_not_found": "That table doesn't exist.",
+    "not_sqlite": "That file is not an SQLite database.",
+    "row_not_found": "That row no longer exists - it may have been changed or deleted. Reload the table.",
+
     # ── server log files ─────────────────────────────────────────────────────
     "log_not_found": "That log file does not exist.",
     "log_unreadable": "The log file could not be read.",
-    "log_empty": "The log file is empty — nothing to upload.",
+    "log_empty": "The log file is empty - nothing to upload.",
     "upload_failed": "The log could not be uploaded to mclo.gs.",
 
     # ── plugins / mods ───────────────────────────────────────────────────────
-    "unknown_platform": "Unknown platform — use modrinth, hangar or spigotmc.",
+    "unknown_platform": "Unknown platform - use modrinth, hangar or spigotmc.",
     "install_target_required": "Choose a server (--id) or a profile (--profile-id) to install into.",
     "plugin_unavailable": "That plugin or mod can't be downloaded automatically.",
+    "plugin_not_installed": "That plugin or mod isn't installed (only ones installed through MCPanel are tracked).",
 
     # ── BuildTools / Java ────────────────────────────────────────────────────
     "buildtools_unavailable": "BuildTools could not be downloaded.",
@@ -94,9 +103,11 @@ CATALOG = {
     "java_not_found": "Java was not found.",
     "jdk_no_compiler": "The selected Java is a JRE without a compiler (javac).",
 
+    # ── third-party disclaimers (mclib addons, plugins / mods) ───────────────
+    "disclaimer_required": "Installing third-party software requires accepting the disclaimer (--yes).",
+    "disclaimer_declined": "Cancelled - the third-party disclaimer was not accepted.",
+
     # ── addon libraries (mcpanel mclib) ──────────────────────────────────────
-    "disclaimer_required": "Installing third-party addons requires accepting the disclaimer (--yes).",
-    "disclaimer_declined": "Cancelled — the third-party disclaimer was not accepted.",
     "mclib_unknown_library": "Unknown addon library.",
     "mclib_index_invalid": "The addon library's index is not valid.",
     "mclib_fetch_failed": "Could not reach the addon library or repository.",
@@ -109,10 +120,16 @@ CATALOG = {
     "mclib_not_installed": "That addon is not installed from a library.",
     "mclib_update_failed": "Some addons could not be updated.",
 
+    # ── self-update (mcpanel updateapp) ──────────────────────────────────────
+    "update_check_failed": "The latest release could not be fetched from GitHub.",
+    "update_failed": "The update could not be installed.",
+    "update_unsupported": "This install can't be updated automatically.",
+    "not_installed": "That product is not installed on this machine.",
+
     # ── addons ───────────────────────────────────────────────────────────────
     "addon_not_found": "No addon with that name.",
     "addon_install_failed": "The addon could not be installed.",
-    "addon_not_removable": "That addon is not user-installed and can't be removed — disable it instead.",
+    "addon_not_removable": "That addon is not user-installed and can't be removed - disable it instead.",
 }
 
 # Codes registered by addons at runtime: code -> (message, addon name).

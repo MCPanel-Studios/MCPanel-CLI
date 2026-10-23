@@ -47,7 +47,7 @@ ln -sf "${REPO}/bin/mclib" "${BIN_DIR}/mclib"
 echo "[3/3] Done."
 echo ""
 case ":${PATH}:" in
-    *":${BIN_DIR}:"*) echo "  ${BIN_DIR} is on your PATH — run:  mcpanel --help" ;;
+    *":${BIN_DIR}:"*) echo "  ${BIN_DIR} is on your PATH - run:  mcpanel --help" ;;
     *) echo "  Add ${BIN_DIR} to your PATH, then run:  mcpanel --help"
        echo "    echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc" ;;
 esac

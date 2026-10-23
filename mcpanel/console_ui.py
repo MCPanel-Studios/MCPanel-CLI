@@ -229,7 +229,7 @@ def _run_action(state, label, fn):
             if result.get("error"):
                 msg = f"[mcpanel] {label} failed: {result['error']}"
             elif result.get("needsEula"):
-                msg = f"[mcpanel] {label} failed: EULA not accepted — run /accept-eula server first"
+                msg = f"[mcpanel] {label} failed: EULA not accepted - run /accept-eula server first"
         if msg:
             applog.error(msg)
             with state["lock"]:
@@ -392,7 +392,7 @@ def _build_app(state, server_id, name):
 
 def _run_plain(server_id):
     path = runstate.log_path(server_id)
-    print(render.dim(f"— attaching to {server_id} (Ctrl-C to detach) —"))
+    print(render.dim(f"- attaching to {server_id} (Ctrl-C to detach) -"))
     print(render.dim("  (install prompt_toolkit for the interactive console)"))
     pos = 0
     try:
@@ -427,11 +427,11 @@ def _run_plain(server_id):
                             print(json.loads(line).get("text", ""))
                         except Exception:
                             print(line)
-                print(render.dim("— server stopped —"))
+                print(render.dim("- server stopped -"))
                 return
             time.sleep(0.4)
     except KeyboardInterrupt:
-        print(render.dim("\n— detached —"))
+        print(render.dim("\n- detached -"))
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
@@ -472,4 +472,4 @@ def run_console(server_id):
         app.run()
     finally:
         state["stop"] = True
-    print(render.dim("— console closed —"))
+    print(render.dim("- console closed -"))

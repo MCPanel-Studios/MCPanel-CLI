@@ -48,7 +48,7 @@ _VERBS = [
     "stats", "accept-eula", "backup", "search", "install", "proxy",
     "buildtools", "discover", "versions", "detect-jdk", "jdk", "system",
     "version", "check-update", "config", "help", "clear", "cls",
-    "exit", "quit", "shutdown", "mclib",
+    "exit", "quit", "shutdown", "mclib", "plugins", "mods",
 ]
 
 _PLATFORMS = ["modrinth", "hangar", "spigotmc"]
@@ -61,7 +61,9 @@ _NOUNS = {
     "info":        ["server", "profile", "plugin"],
     "search":      ["plugins", "mods"],
     "install":     ["plugin", "mod"],
-    "proxy":       ["info", "link"],
+    "plugins":     ["list", "uninstall", "update"],
+    "mods":        ["list", "uninstall", "update"],
+    "proxy":       ["info", "link", "unlink", "sync-port"],
     "start":       ["server"],
     "stop":        ["server"],
     "restart":     ["server"],
@@ -87,7 +89,7 @@ _NOUNS = {
 }
 
 _FLAGS = {
-    ("create",  "server"):   ["-t", "-ram", "-port", "-sw", "-v", "-profile", "-java", "-jargs", "-storage", "--unstable", "--accept-eula"],
+    ("create",  "server"):   ["-t", "-ram", "-port", "-sw", "-v", "-profile", "-java", "-jargs", "-storage", "--unstable", "--accept-eula", "-dest"],
     ("create",  "profile"):  ["-t", "-desc", "-sw", "-versions"],
     ("create",  "profile-from-server"): ["-id", "-t", "-paths", "-desc", "-sw", "-versions"],
     ("update",  "server"):   ["-id", "-t", "-ram", "-port", "-sw", "-v", "-java", "-jargs", "-storage"],
@@ -103,13 +105,13 @@ _FLAGS = {
     ("delete",  "profile"):  ["-id"],
     ("rm",      "server"):   ["-id"],
     ("rm",      "profile"):  ["-id"],
-    ("clone",   "server"):   ["-id", "-t"],
+    ("clone",   "server"):   ["-id", "-t", "-v", "-dest", "--unstable"],
     ("info",    "server"):   ["-id"],
     ("info",    "profile"):  ["-id"],
     ("ping",    "server"):   ["-id", "-host", "-port"],
     ("files",   "server"):   ["-id"],
     ("stats",   "server"):   ["-id"],
-    ("duplicate","server"):  ["-id", "-t"],
+    ("duplicate","server"):  ["-id", "-t", "-v", "-dest", "--unstable"],
     ("import",  "server"):   ["-path", "-t", "-port", "-ram", "-sw", "-v", "-java", "-jargs"],
     ("import",  "profile"):  ["-path", "-t", "-desc", "-sw", "-versions"],
     ("scan",    "server"):   ["-path"],
@@ -124,10 +126,18 @@ _FLAGS = {
     ("info",    "plugin"):   ["--owner", "-n", "-o"],
     ("search",  "plugins"):  ["-id", "-v", "-sw", "-n", "-o"],
     ("search",  "mods"):     ["-id", "-v", "-sw", "-n", "-o"],
-    ("install", "plugin"):   ["-id", "--profile-id", "-v", "--owner", "--version"],
-    ("install", "mod"):      ["-id", "--profile-id", "-v", "--owner", "--version"],
+    ("install", "plugin"):   ["-id", "--profile-id", "-v", "--owner", "--version", "--no-deps"],
+    ("install", "mod"):      ["-id", "--profile-id", "-v", "--owner", "--version", "--no-deps"],
+    ("plugins", "list"):     ["-id", "--profile-id"],
+    ("plugins", "uninstall"): ["-id", "--profile-id"],
+    ("plugins", "update"):   ["-id", "--profile-id", "--all"],
+    ("mods",    "list"):     ["-id", "--profile-id"],
+    ("mods",    "uninstall"): ["-id", "--profile-id"],
+    ("mods",    "update"):   ["-id", "--profile-id", "--all"],
     ("proxy",   "info"):     ["--velocity-id"],
     ("proxy",   "link"):     ["-id", "--velocity-id", "--server-name", "--priority", "--custom-ip"],
+    ("proxy",   "unlink"):   ["-id"],
+    ("proxy",   "sync-port"): ["-id", "--port"],
     ("versions",None):       ["-sw", "--unstable", "--prerelease"],
 }
 
@@ -140,10 +150,14 @@ _POSITIONALS = {
     ("search",  "mods"):    [_PLATFORMS, None],
     ("install", "plugin"):  [_PLATFORMS, None],
     ("install", "mod"):     [_PLATFORMS, None],
+    ("plugins", "uninstall"): [_PLATFORMS, None],
+    ("plugins", "update"):  [_PLATFORMS, None],
+    ("mods",    "uninstall"): [_PLATFORMS, None],
+    ("mods",    "update"):  [_PLATFORMS, None],
 }
 
 _USAGE = {
-    ("create",  "server"):   "/create server -t <name> -sw <software> -v <version> [-ram <MB|nG>] [-port <n>] [--accept-eula]",
+    ("create",  "server"):   "/create server -t <name> -sw <software> -v <version> [-ram <MB|nG>] [-port <n>] [-dest <folder>] [--accept-eula]",
     ("create",  "profile"):  "/create profile -t <name> [-desc <text>] [-sw paper,purpur] [-versions 1.21,1.20]",
     ("create",  "profile-from-server"): "/create profile-from-server -id <id> -t <name> -paths <rel,paths>",
     ("update",  "server"):   "/update server -id <id> [-t <name>] [-ram <MB>] [-port <n>] [-sw <sw>] [-v <ver>]",
@@ -153,7 +167,7 @@ _USAGE = {
     ("ls",      "profiles"): "/ls profiles",
     ("rm",      "server"):   "/rm server -id <id>",
     ("rm",      "profile"):  "/rm profile -id <id>",
-    ("clone",   "server"):   "/clone server -id <id> -t <new name>",
+    ("clone",   "server"):   "/clone server -id <id> -t <new name> [-v <version>] [-dest <folder>]",
     ("info",    "server"):   "/info server -id <id>",
     ("info",    "profile"):  "/info profile -id <id>",
     ("start",   "server"):   "/start server -id <id> [--accept-eula]",
@@ -170,7 +184,7 @@ _USAGE = {
     ("ping",    "server"):   "/ping server [-id <id>] [-host <h>] [-port <p>]",
     ("files",   "server"):   "/files server -id <id>",
     ("stats",   "server"):   "/stats server -id <id>",
-    ("duplicate","server"):  "/duplicate server -id <id> -t <new name>",
+    ("duplicate","server"):  "/duplicate server -id <id> -t <new name> [-v <version>] [-dest <folder>]",
     ("import",  "server"):   "/import server -path <folder> -t <name> [-sw <sw>] [-v <ver>]",
     ("import",  "profile"):  "/import profile -path <folder> -t <name>",
     ("scan",    "server"):   "/scan server -path <folder>",
@@ -187,8 +201,16 @@ _USAGE = {
     ("search",  "mods"):     "/search mods <modrinth|hangar|spigotmc> [query] [-id <id>] [-v <mcVersion>] [-n <N>] [-o <N>]",
     ("install", "plugin"):   "/install plugin <modrinth|hangar|spigotmc> <slug> [-id <id>] [--profile-id <id>] [--owner <owner>] [--version <ver>]",
     ("install", "mod"):      "/install mod <modrinth|hangar|spigotmc> <slug> [-id <id>] [--profile-id <id>] [--owner <owner>] [--version <ver>]",
+    ("plugins", "list"):     "/plugins list [-id <id>] [--profile-id <id>]",
+    ("plugins", "uninstall"): "/plugins uninstall <platform> <id> [-id <id>] [--profile-id <id>]",
+    ("plugins", "update"):   "/plugins update <platform> <id> | --all  [-id <id>] [--profile-id <id>]",
+    ("mods",    "list"):     "/mods list [-id <id>] [--profile-id <id>]",
+    ("mods",    "uninstall"): "/mods uninstall <platform> <id> [-id <id>] [--profile-id <id>]",
+    ("mods",    "update"):   "/mods update <platform> <id> | --all  [-id <id>] [--profile-id <id>]",
     ("proxy",   "info"):     "/proxy info [--velocity-id <id>]",
     ("proxy",   "link"):     "/proxy link [-id <id>] [--velocity-id <id>] [--server-name <name>] [--priority <pos>] [--custom-ip <ip:port>]",
+    ("proxy",   "unlink"):   "/proxy unlink [-id <id>]",
+    ("proxy",   "sync-port"): "/proxy sync-port [-id <id>] [--port <port>]",
     ("versions",None):       "/versions -sw <paper|purpur|velocity|fabric|vanilla|leaf|folia|spigot> [--unstable] [--prerelease]",
     ("detect-jdk",None):     "/detect-jdk",
     ("system",  None):       "/system",
@@ -442,7 +464,7 @@ def _toolbar(text):
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     if not text.startswith("/"):
-        return HTML("<ansibrightblack>Type <b>/</b> to start a command — <b>/help</b> for the full list</ansibrightblack>")
+        return HTML("<ansibrightblack>Type <b>/</b> to start a command - <b>/help</b> for the full list</ansibrightblack>")
     parts = text[1:].split()
     if not parts:
         return HTML("<ansibrightblack>/&lt;command&gt;  Tab to complete</ansibrightblack>")
@@ -508,7 +530,7 @@ def _flag_int(flags, keys, default=None):
 def _pr(action, result):
     import argparse
     # tui=True lets renderers spell follow-up commands the TUI way (/install …).
-    render.render(action, result, argparse.Namespace(tui=True))
+    render.render(action, result, argparse.Namespace(tui=True, action=action))
 
 
 # ── wizards ───────────────────────────────────────────────────────────────────
@@ -528,6 +550,11 @@ def _pick_server(prompt="Select server:", running_only=False, softwares=None, la
     chosen = _pick(prompt, labels)
     idx = labels.index(chosen)
     return entries[idx]["id"]
+
+
+def _ask_dest():
+    """Optional parent folder for a new server; empty keeps the default."""
+    return _ask("Location (parent folder, empty = MCPanel's servers folder)", default="") or None
 
 
 def _wizard_create_server(flags):
@@ -567,6 +594,8 @@ def _wizard_create_server(flags):
     except (TypeError, ValueError):
         port = 25565
 
+    dest = flags.get("dest") or _ask_dest()
+
     accept = flags.get("accept_eula") or _confirm("\n  Accept Minecraft EULA?")
 
     print(f"\n  Creating {name!r} ({sw} {version}, {ram} RAM, port {port})...")
@@ -574,7 +603,7 @@ def _wizard_create_server(flags):
     ns = types.SimpleNamespace(
         name=name, software=sw, version=version, ram=ram, port=port,
         profile=None, java=java, jargs=None, storage=None,
-        unstable=False, accept_eula=accept,
+        unstable=False, accept_eula=accept, dest=dest,
     )
     _pr("create-server", servers.create_server(ns))
 
@@ -597,7 +626,7 @@ def _pick_jdk_for_spigot(version):
 
     good = [j for j in compat.get("jdks", []) if j.get("compatible")]
     if good:
-        labels = [f"{j['version']}  —  {j['path']}" for j in good]
+        labels = [f"{j['version']}  -  {j['path']}" for j in good]
         labels.append("Enter a custom path…")
         recommended = compat.get("recommended")
         default_idx = next((i for i, j in enumerate(good) if j["path"] == recommended), 0)
@@ -608,7 +637,7 @@ def _pick_jdk_for_spigot(version):
 
     print(render.yellow(f"\n  ⚠ No installed JDK satisfies {req}."))
     for j in compat.get("jdks", []):
-        print(f"    {j['version']}  {j['path']}  — {j.get('reason', 'incompatible')}")
+        print(f"    {j['version']}  {j['path']}  - {j.get('reason', 'incompatible')}")
     if not _confirm("\n  Continue anyway with a manually entered path?"):
         return None
     return _ask("Java executable path") or None
@@ -804,18 +833,68 @@ def _wizard_install(kind, pos, flags):
         print()
         sid = _pick_server(f"Select server to install the {kind} into:")
 
-    from . import plugins
+    from . import disclaimers, plugins
+    from .errors import CLIError
     print(f"\n  Installing {slug} from {platform}…")
-    _pr(f"install-{kind}", plugins.install_plugin(
-        types.SimpleNamespace(
-            platform=platform, slug=slug, id=sid, profile_id=profile_id,
-            mc_version=_flag_str(flags, "v", "mc_version"),
-            owner=_hangar_owner(platform, flags),
-            version=_flag_str(flags, "version"),
-        ),
-        progress=lambda p, s: print(f"\r  {s:<50}", end=""),
-    ))
-    print()
+    ns = types.SimpleNamespace(
+        platform=platform, slug=slug, id=sid, profile_id=profile_id,
+        mc_version=_flag_str(flags, "v", "mc_version"),
+        owner=_hangar_owner(platform, flags),
+        version=_flag_str(flags, "version"),
+        no_deps=bool(flags.get("no_deps")),
+        json=True,  # never let install_plugin prompt with plain input()
+    )
+    try:
+        result = plugins.install_plugin(ns)
+        if result.get("code") == "disclaimer_required":
+            extra = []
+            if result.get("dependencies"):
+                extra = ["", "Also installs these required dependencies:"] + [
+                    f"  • {d['name']} {d['version']}".rstrip() for d in result["dependencies"]]
+            if not disclaimers.ask("plugins", result["disclaimer"], extra=extra, **_disclaimer_io()):
+                print(render.dim("  Cancelled."))
+                return
+            ns.yes = True
+            result = plugins.install_plugin(ns, progress=lambda p, s: print(f"\r  {s:<50}", end=""))
+            print()
+    except CLIError as e:
+        result = e.to_dict()
+    _pr(f"install-{kind}", result)
+
+
+def _wizard_installed(kind, op, pos, flags):
+    """/plugins|/mods list|uninstall|update — the ones installed through MCPanel."""
+    from . import plugins
+    from .errors import CLIError
+    if op not in ("list", "uninstall", "update"):
+        print(render.yellow(f"  Unknown: /{kind} {op}  - use list|uninstall|update"))
+        return
+    profile_id = _flag_str(flags, "profile_id")
+    sid = _flag_str(flags, "id")
+    if not sid and not profile_id:
+        print()
+        sid = _pick_server("Select server:")
+    ns = types.SimpleNamespace(id=sid, profile_id=profile_id, mc_version=None,
+                               platform=pos[0] if pos else None,
+                               slug=pos[1] if len(pos) > 1 else None,
+                               all=bool(flags.get("all")))
+    try:
+        if op == "list":
+            result = plugins.list_plugins(ns)
+        elif op == "uninstall":
+            if not ns.platform or not ns.slug:
+                print(render.yellow(f"  Usage: /{kind} uninstall <platform> <id>  - see /{kind} list"))
+                return
+            result = plugins.uninstall_plugin(ns)
+        else:
+            if not ns.all and (not ns.platform or not ns.slug):
+                print(render.yellow(f"  Usage: /{kind} update <platform> <id>  or  /{kind} update --all"))
+                return
+            result = plugins.update_plugin(ns, progress=lambda p, s: print(f"\r  {s:<50}", end=""))
+            print()
+    except CLIError as e:
+        result = e.to_dict()
+    _pr(f"plugins-{op}", result)
 
 
 def _wizard_plugin_info(pos, flags):
@@ -838,6 +917,24 @@ def _wizard_plugin_info(pos, flags):
 
 def _wizard_proxy(noun, flags):
     from . import servers
+    if noun == "unlink":
+        sid = _flag_str(flags, "id")
+        if not sid:
+            print()
+            sid = _pick_server("Select server to unlink from its proxy:",
+                               softwares=servers.PAPER_SOFTWARES,
+                               label="Paper-based ")
+        _pr("proxy-unlink", servers.unlink_from_proxy(types.SimpleNamespace(id=sid)))
+        return
+    if noun == "sync-port":
+        sid = _flag_str(flags, "id")
+        if not sid:
+            print()
+            sid = _pick_server("Select linked server:", softwares=servers.PAPER_SOFTWARES,
+                               label="Paper-based ")
+        _pr("proxy-sync-port", servers.sync_proxy_port(types.SimpleNamespace(
+            id=sid, port=_flag_int(flags, ("port",)))))
+        return
     vid = _flag_str(flags, "velocity_id")
     if not vid:
         print()
@@ -901,6 +998,12 @@ def _set_session(session):
     _active_session = session
 
 
+def _disclaimer_io():
+    """TUI styling + prompt for disclaimers.ask()."""
+    return {"style": (render.yellow, render.dim),
+            "input_fn": lambda q: _ask(q.strip(), default="n")}
+
+
 def _mclib(tokens):
     """`/mclib <library|url> <list|install|update|downgrade|remove> [name] [version]`
     (also accepted without the slash). Handled before the generic parser,
@@ -917,14 +1020,9 @@ def _mclib(tokens):
         return
 
     def confirm(text):
-        print()
-        print(render.yellow("  ⚠  THIRD-PARTY SOFTWARE"))
-        import textwrap
-        for para in text.split("\n"):
-            for line in textwrap.wrap(para, 76) or [""]:
-                print(render.dim("  " + line))
-        print()
-        return _confirm("Accept and continue?")
+        # `y` covers the next 15 minutes, `a` hides the disclaimer for good.
+        from . import disclaimers
+        return disclaimers.ask("addons", text, **_disclaimer_io())
 
     ns = types.SimpleNamespace(source=pos[0], op=pos[1],
                                name=pos[2] if len(pos) > 2 else None,
@@ -959,7 +1057,7 @@ def _execute(text):
         _shutdown_all()
         return
     if not text.startswith("/"):
-        print(render.yellow("  Commands start with /  — try /help"))
+        print(render.yellow("  Commands start with /  - try /help"))
         return
 
     try:
@@ -1159,12 +1257,28 @@ def _dispatch(verb, noun, flags, pos=()):
 
     # ── duplicate ─────────────────────────────────────────────────────────
     if verb in ("duplicate", "clone"):
-        sid = flags.get("id") or _pick_server("Select server to duplicate:")
+        sid = flags.get("id") or _pick_server("Select server to clone:")
         name = flags.get("name") or flags.get("t") or _ask("\n  New server name")
-        if name:
-            from . import servers
-            _pr("duplicate-server",
-                servers.duplicate_server(types.SimpleNamespace(id=sid, name=name)))
+        if not name:
+            return
+        from . import servers
+        from .config import load_config, find_server
+        src = find_server(load_config(), sid) or {}
+        version = flags.get("version") or flags.get("v")
+        if not version and not flags.get("id"):
+            keep = f"Keep current ({src.get('version', '?')})"
+            if _pick("Version:", [keep, "Pick another version"]) != keep:
+                from .versions import fetch_versions
+                vers = fetch_versions(src.get("software", "")).get("versions", [])
+                version = _pick(f"Select {src.get('software')} version:", vers) if vers else _ask("Version")
+        dest = flags.get("dest")
+        if not dest and not flags.get("id"):
+            dest = _ask_dest()
+        ns = types.SimpleNamespace(id=sid, name=name, version=version, dest=dest,
+                                   unstable=bool(flags.get("unstable")))
+        result = servers.duplicate_server(ns, lambda p, s: print(f"\r  {s:<50}", end=""))
+        print()
+        _pr("duplicate-server", result)
         return
 
     # ── ping ──────────────────────────────────────────────────────────────
@@ -1259,7 +1373,7 @@ def _dispatch(verb, noun, flags, pos=()):
             _pr("backup-restore", _bkp.restore_backup(ns, progress=lambda p, s: print(f"\r  {s:<50}", end="")))
             print()
         else:
-            print(render.yellow(f"  Unknown: /backup {noun}  — use create|list|delete|restore"))
+            print(render.yellow(f"  Unknown: /backup {noun}  - use create|list|delete|restore"))
         return
 
     # ── plugins / mods ────────────────────────────────────────────────────
@@ -1283,12 +1397,16 @@ def _dispatch(verb, noun, flags, pos=()):
         _wizard_install(noun, pos, flags)
         return
 
+    if verb in ("plugins", "mods"):
+        _wizard_installed(verb, noun or "list", list(pos), flags)
+        return
+
     # ── proxy (Velocity) ──────────────────────────────────────────────────
     if verb == "proxy":
         if noun in ("info", "link", None):
             _wizard_proxy(noun or "info", flags)
         else:
-            print(render.yellow(f"  Unknown: /proxy {noun}  — use info|link"))
+            print(render.yellow(f"  Unknown: /proxy {noun}  - use info|link|unlink|sync-port"))
         return
 
     # ── buildtools ────────────────────────────────────────────────────────
@@ -1360,7 +1478,7 @@ def _dispatch(verb, noun, flags, pos=()):
             _pr("import-profile", profiles.import_profile(ns))
         return
 
-    print(render.yellow(f"  Unknown command: /{verb}  — try /help"))
+    print(render.yellow(f"  Unknown command: /{verb}  - try /help"))
 
 
 # ── help ──────────────────────────────────────────────────────────────────────
@@ -1372,7 +1490,7 @@ def _help():
     print(f"""
 {B("  MCPanel CLI commands")}
   ─────────────────────────────────────────────────────────────────
-  {D("Every argument below is optional — leave it out and you get a picker or a prompt.")}
+  {D("Every argument below is optional - leave it out and you get a picker or a prompt.")}
 
 {C("  Servers")}
   /create server           guided wizard (or pass flags to skip steps)
@@ -1406,6 +1524,8 @@ def _help():
 {C("  Proxy (Velocity)")}
   /proxy info              servers registered in a Velocity proxy's velocity.toml
   /proxy link              link a Paper-based server into a Velocity proxy
+  /proxy unlink            remove a server from its Velocity proxy
+  /proxy sync-port         point a linked server's proxy entry at its current port
   {D("--velocity-id <id> -id <id> [--server-name <n>] [--priority <n>] [--custom-ip <ip:port>]")}
 
 {C("  Addon libraries")}
@@ -1451,14 +1571,28 @@ def _help():
 
 # ── main loop ─────────────────────────────────────────────────────────────────
 
+def _print_news():
+    """The newest MCPanel news item under the banner; nothing if there is none."""
+    from . import news
+    item = news.fetch_latest()
+    if not item:
+        return
+    date = render.dim(f"  {item['date']}") if item["date"] else ""
+    print(render.yellow("  News  ") + render.bold(item["title"]) + date)
+    if item["summary"]:
+        print(f"     {item['summary']}")
+    print(render.dim(f"     {item['url']}\n"))
+
+
 def run():
     applog.info(f"TUI session started (mcpanel v{__version__})")
     print(render.bold(f"\n  MCPanel CLI  v{__version__}"))
     print(render.dim("  /help for commands · Tab to complete · /exit to quit · /shutdown to stop all servers\n"))
+    _print_news()
 
     if not _PT:
         print(render.yellow(
-            "  prompt_toolkit not installed — completions disabled.\n"
+            "  prompt_toolkit not installed - completions disabled.\n"
             "  Run:  pip install prompt_toolkit\n"
         ))
 

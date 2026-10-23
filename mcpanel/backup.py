@@ -193,7 +193,7 @@ def restore_backup(args, progress=None):
         # Overwriting world files under a live server corrupts them, and the
         # server would save its in-memory state over the restore anyway.
         if runstate.is_running(srv["id"]):
-            return {"error": "Server is running — stop it before restoring a backup",
+            return {"error": "Server is running - stop it before restoring a backup",
                     "code": "server_running"}
 
         is_api = getattr(args, "json", False)
@@ -214,7 +214,7 @@ def restore_backup(args, progress=None):
             _prog(5, "Verifying backup…")
             bad = zf.testzip()
             if bad is not None:
-                return {"error": f"Backup is corrupt (first bad file: {bad}) — nothing was restored",
+                return {"error": f"Backup is corrupt (first bad file: {bad}) - nothing was restored",
                         "code": "backup_corrupt"}
             # (zipfile.extract already strips absolute paths and ".." parts.)
             members = zf.infolist()

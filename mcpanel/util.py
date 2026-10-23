@@ -125,6 +125,31 @@ def is_valid_port(port):
         return False
 
 
+def ram_mb(ram):
+    """'6G' / '2048M' → megabytes, or None if it isn't a RAM value."""
+    m = re.match(r"^(\d+)(M|G)$", str(ram or ""), re.I)
+    if not m:
+        return None
+    return int(m.group(1)) * 1024 if m.group(2).upper() == "G" else int(m.group(1))
+
+
+def auto_heap(ram):
+    """The -Xmx for a server whose `ram` is its TOTAL memory budget and that
+    has no explicit heap: the JVM needs memory beyond the heap (classes, JIT
+    code, thread stacks, GC, network buffers), so leave 20% of the budget for
+    that - at least 384 MB, at most 1.5 GB - and never go below 256 MB."""
+    total = ram_mb(ram)
+    if total is None:
+        return ram
+    overhead = min(max(total // 5, 384), 1536)
+    return f"{max(total - overhead, 256)}M"
+
+
+def java_heap(srv):
+    """The heap a server actually runs with: its own `heap`, else auto_heap."""
+    return srv.get("heap") or auto_heap(srv.get("ram"))
+
+
 def xms_from_ram(ram):
     m = re.match(r"^(\d+)(M|G)$", str(ram or ""), re.I)
     if not m:
@@ -151,9 +176,14 @@ def build_file_tree(dir_path, root_path, depth=0):
     except OSError:
         return []
     items = []
+    # plugins/.list and mods/.list hold MCPanel's install records — hidden
+    # from the file manager (see pluginlist.py).
+    hide_list = os.path.basename(os.path.normpath(dir_path)) in ("plugins", "mods")
     for entry in entries:
         full = os.path.join(dir_path, entry.name)
         rel = os.path.relpath(full, root_path)
+        if hide_list and entry.name == ".list":
+            continue
         if entry.is_dir(follow_symlinks=False):
             items.append({
                 "name": entry.name, "type": "dir", "path": rel,
@@ -189,12 +219,13 @@ def resolve_jar(srv):
 
 def build_java_command(srv, jar):
     java_path = srv.get("javaPath") or "java"
-    ram = srv.get("ram")
+    # `ram` is the server's total memory budget; the heap is only part of it.
+    heap = java_heap(srv)
     return [
         java_path,
         *parse_java_args(srv.get("javaArgs") or ""),
-        f"-Xmx{ram}",
-        f"-Xms{xms_from_ram(ram)}",
+        f"-Xmx{heap}",
+        f"-Xms{xms_from_ram(heap)}",
         "-jar", jar, "nogui",
     ]
 

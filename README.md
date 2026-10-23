@@ -14,6 +14,8 @@
 A CLI featuring all [MCPanel](https://github.com/DippyCoder/MCPanel) features, but as a CLI.
 Runs on **Windows, macOS, and Linux** with no native dependencies beyond Python and Java.
 
+>**Note:** MCPanel-CLI and all MCPanel related repositorys will be at [MCPanel-Studios](https://github.com/MCPanel-Studios) soon!
+
 Three faces to the same engine:
 
 | Surface | How to use | Output |
@@ -146,12 +148,12 @@ mcpanel stop server -id srv_1700000000000
 ### Servers
 | Command | What it does |
 |---------|--------------|
-| `create server -t <name> -sw <software> -v <version> [-ram <MB\|nG>] [-port <n>] [-profile <id>] [-java <path>] [-jargs "<args>"] [-storage <limit>] [--unstable] [--accept-eula]` | Create + download a server |
+| `create server -t <name> -sw <software> -v <version> [-ram <MB\|nG>] [-port <n>] [-profile <id>] [-java <path>] [-jargs "<args>"] [-storage <limit>] [--unstable] [-dest <folder>] [--accept-eula]` | Create + download a server. `-dest` puts it in `<folder>/<name>` (any drive or mount) instead of MCPanel's servers folder |
 | `list servers` | List all servers + online status |
 | `info server -id <id>` | Full server details |
 | `update server -id <id> [-t -ram -port -sw -v -java -jargs -storage]` | Change settings (port rewrites `server.properties`) |
 | `delete server -id <id> [--keep-files]` | Delete the server and its files (a linked server's original folder too). `--keep-files` only removes it from MCPanel's list and leaves the folder alone - the panels' **Remove** button |
-| `duplicate server -id <id> -t <newName>` | Copy a server |
+| `duplicate server -id <id> -t <newName> [-v <version>] [-dest <folder>] [--unstable]` (alias `clone`) | Copy a server. `-v` switches the copy to another version of the same software (new jar, files copied as-is); `-dest` as for `create server` |
 | `import server -path <folder> [-t <name>] [--link] [-port -ram -sw -v -java -jargs]` | Adopt any existing server folder - no MCPanel config needed; software, version, port and RAM are detected. `--link` uses the folder in place instead of copying it |
 | `start \| stop \| restart \| kill server -id <id>` | Lifecycle (`start`/`restart` accept `--accept-eula`) |
 | `cmd server -id <id> -c "<command>"` | Send a console command |
@@ -249,6 +251,16 @@ Completes command names, nouns, `-sw`/platform values, and live server IDs (via 
 
 ### System
 `detect-jdk` (now flags JRE-only installs via `hasCompiler`), `fetch jdk-compat`, `system`, `version`, `check-update`, `config show`, `config path`.
+
+### Updating
+```bash
+mcpanel updateapp                       # update everything installed here (MCPanel, WebUI, CLI)
+mcpanel updateapp -p mcpanel            # just the desktop app (AppImage / rpm / deb / NSIS / dmg)
+mcpanel updateapp -p cli                # just the CLI (alias of mcpanel-cli; reinstalls via pip)
+mcpanel updateapp -path ~/MCPanel-WebUI # the WebUI in that folder (git pull / source zip + npm install)
+```
+Fetches the newest GitHub release and installs it. Every GitHub fetch tries the
+`MCPanel-Studios` organisation first and falls back to the old `DippyCoder` repositories.
 
 ### Shutdown
 ```bash

@@ -202,7 +202,7 @@ def jdk_compatibility(software, version):
         v = _feature_version(jdk.get("version"))
         compatible, reason = True, None
         if require_compiler and not jdk.get("hasCompiler"):
-            compatible, reason = False, "JRE only — no compiler (javac)"
+            compatible, reason = False, "JRE only - no compiler (javac)"
         elif rng and v is not None:
             lo, hi = rng
             if v < lo or (hi is not None and v > hi):

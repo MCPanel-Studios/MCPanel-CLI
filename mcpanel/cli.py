@@ -15,7 +15,7 @@ import sys
 import time
 
 from . import paths, servers, profiles, system, versions, runstate, render, plugins, backup, buildtools, config
-from . import addons, applog, errors, mclib, logfiles
+from . import addons, applog, errors, mclib, logfiles, databases, selfupdate
 from . import __version__
 
 
@@ -35,6 +35,12 @@ class _Parser(argparse.ArgumentParser):
     can answer with the usual {"error": ...} JSON. Subparsers inherit this
     class automatically."""
     json_errors = False
+
+    def __init__(self, *args, **kwargs):
+        # No prefix matching (`--lin` for `--link`): the WebUI decides who may
+        # run a command by looking for exact flags like --link / -dest.
+        kwargs.setdefault("allow_abbrev", False)
+        super().__init__(*args, **kwargs)
 
     def error(self, message):
         if _Parser.json_errors:
@@ -163,7 +169,7 @@ _mcpanel_complete() {
 
   # top-level commands
   if [[ $COMP_CWORD -eq 1 ]]; then
-    local cmds="create list ls info fetch delete rm update start stop restart kill cmd logs upload-log sessions console ping duplicate clone files stats accept-eula import proxy scan open versions detect-jdk jdk system version check-update config shutdown discover errors search install completion backup buildtools addons mclib api cli debug"
+    local cmds="create list ls info fetch delete rm update start stop restart kill cmd logs upload-log sessions console ping duplicate clone files stats accept-eula import proxy scan open versions detect-jdk jdk system version check-update updateapp config shutdown discover errors search install plugins mods completion backup buildtools addons mclib api cli debug"
     COMPREPLY=($(compgen -W "$cmds" -- "$cur"))
     return
   fi
@@ -184,9 +190,11 @@ _mcpanel_complete() {
     config)   COMPREPLY=($(compgen -W "show path" -- "$cur")) ;;
     search)   COMPREPLY=($(compgen -W "plugins mods" -- "$cur")) ;;
     install)  COMPREPLY=($(compgen -W "plugin mod" -- "$cur")) ;;
+    plugins|mods) COMPREPLY=($(compgen -W "list uninstall update" -- "$cur")) ;;
     completion) COMPREPLY=($(compgen -W "bash zsh" -- "$cur")) ;;
     buildtools) COMPREPLY=($(compgen -W "version update" -- "$cur")) ;;
     debug)    COMPREPLY=($(compgen -W "first_start" -- "$cur")) ;;
+    updateapp) [[ "$prev" == "-p" || "$prev" == "-path" || "$prev" == "--path" ]] && COMPREPLY=($(compgen -W "mcpanel mcpanel-cli cli" -- "$cur") $(compgen -d -- "$cur")) ;;
     mclib)
       if [[ $COMP_CWORD -eq 2 ]]; then COMPREPLY=($(compgen -W "mclib" -- "$cur"))
       elif [[ $COMP_CWORD -eq 3 ]]; then COMPREPLY=($(compgen -W "list install update downgrade remove" -- "$cur")); fi ;;
@@ -237,6 +245,8 @@ _mcpanel() {
         'versions:list available versions'
         'search:search for plugins or mods'
         'install:install a plugin or mod'
+        'plugins:list, uninstall or update installed plugins'
+        'mods:list, uninstall or update installed mods'
         'proxy:Velocity proxy info / link'
         'backup:create, list, restore or delete backups'
         'completion:output shell completion script'
@@ -248,6 +258,7 @@ _mcpanel() {
         'system:show system info'
         'version:show CLI version'
         'check-update:check for a newer MCPanel release'
+        'updateapp:install the newest MCPanel / MCPanel-CLI / MCPanel-WebUI release'
         'config:show config / data paths'
         'shutdown:kill all running servers'
         'cli:interactive terminal GUI'
@@ -268,6 +279,13 @@ _mcpanel() {
           if [[ ${#words} -eq 3 ]]; then
             _values 'type' 'plugin' 'mod'
           elif [[ ${#words} -eq 4 ]]; then
+            _values 'platform' 'modrinth' 'hangar' 'spigotmc'
+          fi
+          ;;
+        plugins|mods)
+          if [[ ${#words} -eq 3 ]]; then
+            _values 'action' 'list' 'uninstall' 'update'
+          elif [[ ${#words} -eq 4 && ${words[3]} != list ]]; then
             _values 'platform' 'modrinth' 'hangar' 'spigotmc'
           fi
           ;;
@@ -325,7 +343,8 @@ def f_name(p, required=True):
 def f_server_create(p):
     f_name(p)
     p.add_argument("-ram", "--ram", dest="ram", default="2048", metavar="<MB|nG>",
-                   help="memory, megabytes or e.g. 4G (default 2048)")
+                   help="total memory for the server, megabytes or e.g. 4G (default 2048)")
+    f_heap(p)
     p.add_argument("-p", "-port", "--port", dest="port", type=int, default=25565, metavar="<port>")
     p.add_argument("-sw", "--software", dest="software", required=True, metavar="<software>",
                    help="paper|purpur|velocity|fabric|vanilla|leaf|folia|spigot")
@@ -337,6 +356,31 @@ def f_server_create(p):
                    help="storage limit e.g. 20G")
     p.add_argument("--unstable", dest="unstable", action="store_true", help="allow unstable/experimental builds")
     p.add_argument("--accept-eula", dest="accept_eula", action="store_true", help="write eula=true")
+    f_dest(p)
+
+
+def f_dest(p):
+    p.add_argument("-dest", "--dest", dest="dest", default=None, metavar="<folder>",
+                   help="parent folder to put the server in (any drive/mount); it gets a "
+                        "subfolder named after the server. Default: MCPanel's servers folder")
+
+
+def f_heap(p):
+    p.add_argument("-heap", "--heap", dest="heap", default=None, metavar="<MB|nG>",
+                   help="Java heap limit (-Xmx), part of -ram. Default: picked from -ram, leaving "
+                        "room for the JVM's own memory (on update, \"\" switches back to that)")
+
+
+def f_plugin_target(p):
+    p.add_argument("-id", "--id", dest="id", default=None, metavar="<serverid>")
+    p.add_argument("--profile-id", dest="profile_id", default=None, metavar="<profileid>")
+
+
+def f_plugin_ref(p, required=True):
+    nargs = None if required else "?"
+    p.add_argument("platform", nargs=nargs, default=None, metavar="<modrinth|hangar|spigotmc>")
+    p.add_argument("slug", nargs=nargs, default=None, metavar="<id>",
+                   help="the id shown by `plugins list`")
 
 
 def noun(p, default="server"):
@@ -350,7 +394,7 @@ def leaf(sub, name, func, action, progress_ok=False, help=None):
 
 
 # ─── command tree ────────────────────────────────────────────────────────────
-def add_commands(sub):
+def add_commands(sub, api=False):
     # create -------------------------------------------------------------
     create = sub.add_parser("create", help="create a server / profile")
     csub = create.add_subparsers(dest="noun", metavar="<server|profile|profile-from-server>", required=True)
@@ -406,6 +450,8 @@ def add_commands(sub):
                    help="path inside logs/ (default: latest.log)")
     p = leaf(fsub, "files", servers.get_server_file_tree, "file-tree"); f_id(p)
     p = leaf(fsub, "stats", servers.get_server_dir_stats, "stats"); f_id(p)
+    p.add_argument("--no-size", dest="no_size", action="store_true",
+                   help="skip the disk-usage walk (just RAM/CPU/max players)")
     p = leaf(fsub, "status", servers.is_server_running, "status"); f_id(p)
     leaf(fsub, "system", _system_info, "system")
     leaf(fsub, "update", _check_update, "check-update")
@@ -434,6 +480,7 @@ def add_commands(sub):
     p.add_argument("-t", "--name", dest="name", default=None)
     p.add_argument("-p", "-port", "--port", dest="port", type=int, default=None)
     p.add_argument("-ram", "--ram", dest="ram", default=None)
+    f_heap(p)
     p.add_argument("-sw", "--software", dest="software", default=None)
     p.add_argument("-v", "--version", dest="version", default=None)
     p.add_argument("-java", "--java", dest="java", default=None)
@@ -487,8 +534,13 @@ def add_commands(sub):
     p.add_argument("-port", "-p", "--port", dest="port", type=int, default=None)
     p.set_defaults(func=servers.ping, action="ping")
 
-    p = sub.add_parser("duplicate", help="duplicate a server", aliases=["clone"])
+    p = sub.add_parser("duplicate", help="clone a server (optionally to another version / location)",
+                       aliases=["clone"])
     noun(p); f_id(p); f_name(p)
+    p.add_argument("-v", "--version", dest="version", default=None, metavar="<version>",
+                   help="switch the copy to this version of the same software (downloads a new jar)")
+    p.add_argument("--unstable", dest="unstable", action="store_true", help="allow unstable/experimental builds")
+    f_dest(p)
     p.set_defaults(func=servers.duplicate_server, action="duplicate-server", progress_ok=True)
 
     p = sub.add_parser("files", help="show a server's file tree")
@@ -528,7 +580,7 @@ def add_commands(sub):
 
     # proxy --------------------------------------------------------------
     proxy = sub.add_parser("proxy", help="Velocity proxy link utilities")
-    proxysub = proxy.add_subparsers(dest="noun", metavar="<info|link>", required=True)
+    proxysub = proxy.add_subparsers(dest="noun", metavar="<info|link|unlink|sync-port>", required=True)
     p = leaf(proxysub, "info", servers.proxy_info, "proxy-info",
              help="list servers registered in a Velocity proxy config")
     p.add_argument("--velocity-id", dest="velocity_id", required=True, metavar="<id>")
@@ -539,6 +591,13 @@ def add_commands(sub):
     p.add_argument("--server-name", dest="server_name", default=None, metavar="<name>")
     p.add_argument("--priority", dest="priority", type=int, default=None, metavar="<pos>")
     p.add_argument("--custom-ip", dest="custom_ip", default=None, metavar="<ip:port>")
+    p = leaf(proxysub, "unlink", servers.unlink_from_proxy, "proxy-unlink",
+             help="unlink a server from its Velocity proxy")
+    f_id(p)
+    p = leaf(proxysub, "sync-port", servers.sync_proxy_port, "proxy-sync-port",
+             help="point a linked server's proxy entry at its current port")
+    f_id(p)
+    p.add_argument("--port", dest="port", type=int, default=None, metavar="<port>")
 
     # scan ---------------------------------------------------------------
     scan = sub.add_parser("scan", help="inspect a folder before importing")
@@ -570,6 +629,12 @@ def add_commands(sub):
     p.set_defaults(func=_app_version, action="app-version")
     p = sub.add_parser("check-update", help="check for a newer MCPanel release")
     p.set_defaults(func=_check_update, action="check-update")
+    p = sub.add_parser("updateapp", help="download + install the newest release of MCPanel, the CLI or the WebUI")
+    p.add_argument("-p", "-path", "--path", dest="product", default=None,
+                   metavar="<mcpanel|mcpanel-cli|path>",
+                   help="what to update: mcpanel, mcpanel-cli (alias cli), or the path of an "
+                        "MCPanel-WebUI folder. Default: everything installed here")
+    p.set_defaults(func=selfupdate.update_app, action="updateapp", progress_ok=True)
 
     cfgp = sub.add_parser("config", help="show config / data paths")
     cfgsub = cfgp.add_subparsers(dest="noun", metavar="<show|path>", required=True)
@@ -625,6 +690,27 @@ def add_commands(sub):
                        help="Hangar project owner (required when slug is ambiguous)")
         p.add_argument("--version", dest="version", default=None, metavar="<version>",
                        help="pin a specific plugin version")
+        p.add_argument("-y", "--yes", dest="yes", action="store_true",
+                       help="accept the third-party disclaimer without asking")
+        p.add_argument("--no-deps", dest="no_deps", action="store_true",
+                       help="don't install the required dependencies")
+
+    # plugins / mods (the ones installed through MCPanel) -----------------
+    for _kname in ("plugins", "mods"):
+        kp = sub.add_parser(_kname, help=f"list / uninstall / update the {_kname} installed through MCPanel")
+        ksub = kp.add_subparsers(dest="noun", metavar="<list|uninstall|update>", required=True)
+        p = leaf(ksub, "list", plugins.list_plugins, "plugins-list",
+                 help=f"list the {_kname} recorded in {_kname}/.list")
+        f_plugin_target(p)
+        p = leaf(ksub, "uninstall", plugins.uninstall_plugin, "plugins-uninstall",
+                 help="delete the jar and its record")
+        f_plugin_ref(p)
+        f_plugin_target(p)
+        p = leaf(ksub, "update", plugins.update_plugin, "plugins-update", progress_ok=True,
+                 help="update to the newest compatible version (or every one with --all)")
+        f_plugin_ref(p, required=False)
+        f_plugin_target(p)
+        p.add_argument("--all", dest="all", action="store_true", help="update everything installed")
 
     # completion ---------------------------------------------------------
     comp = sub.add_parser("completion", help="output shell completion script")
@@ -651,6 +737,12 @@ def add_commands(sub):
              help="restore a server from a backup")
     f_id(p)
     p.add_argument("-name", "--name", dest="backup_name", required=True, metavar="<filename>")
+
+    # databases ------------------------------------------------------------
+    # Backend for the desktop app's / WebUI's Databases page and SQLite editor
+    # only: reachable as `mcpanel api db …`, not a command people type.
+    if api:
+        databases.add_parser(sub, leaf)
 
     # buildtools -----------------------------------------------------------
     bt = sub.add_parser("buildtools", help="SpigotMC BuildTools version / update")
@@ -694,7 +786,7 @@ def add_commands(sub):
     p = sub.add_parser(
         "mclib", help="install addons from addon libraries (MCLib, …) or GitHub/Codeberg releases",
         description="mcpanel mclib <library|repo-url> <list|install|update|downgrade|remove> [name] [version]"
-                    " — with a repo URL the name is skipped: mcpanel mclib <url> install [version]")
+                    " - with a repo URL the name is skipped: mcpanel mclib <url> install [version]")
     p.add_argument("source", metavar="<library|url>",
                    help="a library from <addons>/libraries.json (default: mclib) or a GitHub/Codeberg repo URL")
     p.add_argument("op", metavar="<list|install|update|downgrade|remove>")
@@ -705,13 +797,13 @@ def add_commands(sub):
     render.RENDERERS["mclib"] = mclib.render_mclib
 
     # Addon-provided commands mount last, so `--help` lists the built-ins first.
-    addons.register_all(sub)
+    addons.register_all(sub, machine=api)
 
 
 def build_parser():
     parser = _Parser(
         prog="mcpanel",
-        description="MCPanel — Minecraft Server Panel, from the terminal.",
+        description="MCPanel - Minecraft Server Panel, from the terminal.",
         epilog="Use 'mcpanel api <command>' for raw JSON output, or 'mcpanel cli' for the interactive GUI.",
     )
     parser.add_argument("--version", action="version", version=f"MCPanel CLI v{__version__}")
@@ -724,7 +816,7 @@ def build_parser():
     api = sub.add_parser("api", help="run any command with raw JSON output")
     api.set_defaults(json=True)
     apisub = api.add_subparsers(dest="verb", metavar="<command>", required=True)
-    add_commands(apisub)
+    add_commands(apisub, api=True)
 
     # cli: interactive TUI
     clip = sub.add_parser("cli", help="interactive terminal GUI (WIP)")

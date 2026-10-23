@@ -73,14 +73,25 @@ def _invalid_id(value):
     return None if paths.is_valid_id(value) else fail("invalid_id", f"Invalid id: {value!r}")
 
 
-def _validate_settings(port=None, ram=None, software=None):
+def _validate_settings(port=None, ram=None, software=None, heap=None, ram_for_heap=None):
     """Shared by create/update/import. Returns an error dict or None — catching
     these here beats writing them into server.properties / the java command
-    line and finding out when the server refuses to boot."""
+    line and finding out when the server refuses to boot.
+
+    `heap` "" means "clear it" (automatic heap); `ram_for_heap` is the RAM
+    limit to check it against when `ram` itself isn't being changed."""
     if port is not None and not util.is_valid_port(port):
-        return {"error": f"Invalid port {port!r} — must be 1-65535", "code": "invalid_port"}
+        return {"error": f"Invalid port {port!r} - must be 1-65535", "code": "invalid_port"}
     if ram is not None and not util.is_valid_ram(util.normalize_ram(ram)):
-        return {"error": f"Invalid RAM {ram!r} — use megabytes (2048) or e.g. 4G", "code": "invalid_ram"}
+        return {"error": f"Invalid RAM {ram!r} - use megabytes (2048) or e.g. 4G", "code": "invalid_ram"}
+    if heap:
+        norm = util.normalize_ram(heap)
+        if not util.is_valid_ram(norm):
+            return {"error": f"Invalid heap limit {heap!r} - use megabytes (2048) or e.g. 4G", "code": "invalid_ram"}
+        limit = util.ram_mb(util.normalize_ram(ram if ram is not None else ram_for_heap))
+        if limit is not None and util.ram_mb(norm) > limit:
+            return {"error": f"The heap limit ({norm}) can't be larger than the RAM limit - the heap is part of it",
+                    "code": "invalid_ram"}
     if software is not None and software not in SOFTWARE:
         return {"error": f"Unknown software '{software}'. One of: {', '.join(SOFTWARE)}",
                 "code": "invalid_software"}
@@ -95,6 +106,80 @@ def _remove_server_dir(server_dir):
         shutil.rmtree(server_dir, ignore_errors=True)
         return True
     return False
+
+
+# Characters no filesystem MCPanel runs on accepts in a folder name.
+_BAD_FOLDER_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _folder_name(name, fallback):
+    """A server's display name as a folder name — it's what the user will be
+    looking for when browsing that drive later, unlike an srv_<ms> id."""
+    clean = _BAD_FOLDER_CHARS.sub("_", name or "").strip().strip(".")
+    return clean[:100] or fallback
+
+
+def _new_server_dir(dest, name, sid):
+    """Pick (but don't create) the folder for a new server.
+
+    No `dest` — or MCPanel's own servers dir — keeps the default servers/<id>.
+    Anything else is a PARENT folder (another drive, a mount, …) and the server
+    gets its own subfolder in it, named after the server.
+
+    Returns (server_dir, external, error). An external folder is registered
+    as `linked`: it lives outside servers/, which is what delete/remove and
+    discovery key on."""
+    if not (dest or "").strip():
+        return os.path.join(paths.SERVERS_DIR, sid), False, None
+    parent = os.path.abspath(os.path.expanduser(dest.strip()))
+    if os.path.realpath(parent) == os.path.realpath(paths.SERVERS_DIR):
+        return os.path.join(paths.SERVERS_DIR, sid), False, None
+    if not os.path.isdir(parent):
+        return None, False, fail("invalid_path", f"Destination is not a folder: {dest}")
+    if not os.access(parent, os.W_OK | os.X_OK):
+        return None, False, fail("invalid_path", f"MCPanel can't write to {parent}")
+    if paths.is_within(parent, paths.USER_DATA):
+        return None, False, fail("invalid_path",
+                                 "Pick a destination outside MCPanel's data directory "
+                                 "(or leave it empty for the default location)")
+    for s in load_config().get("servers", []):
+        if s.get("dir") and paths.is_within(parent, s["dir"]):
+            return None, False, fail("invalid_path",
+                                     f"Destination is inside the folder of server \"{s.get('name')}\" ({s['id']})")
+    base = _folder_name(name, sid)
+    server_dir = os.path.join(parent, base)
+    n = 2
+    while os.path.lexists(server_dir):
+        server_dir = os.path.join(parent, f"{base}-{n}")
+        n += 1
+    return server_dir, True, None
+
+
+def _discard_new_dir(server_dir, external):
+    """Undo a create/duplicate that failed half-way. An external folder was
+    created by this very call (_new_server_dir never reuses an existing one),
+    so it is safe to remove even though it's outside servers/."""
+    if not server_dir:
+        return
+    if external:
+        shutil.rmtree(server_dir, ignore_errors=True)
+    else:
+        _remove_server_dir(server_dir)
+
+
+def _install_jar(software, version, server_dir, progress=None, java_path="java", unstable=False):
+    """Download (or, for Spigot, build) `software` `version` into
+    <server_dir>/server.jar. Returns an error dict or None."""
+    if software == "spigot":
+        return buildtools.build_spigot(version, server_dir, progress, java_path=java_path)
+    if progress:
+        progress(0, "Resolving download URL...")
+    url = resolve_download_url(software, version, unstable)
+    if progress:
+        progress(0, "Downloading server jar...")
+    download_file(url, os.path.join(server_dir, "server.jar"),
+                  (lambda p: progress(p, f"Downloading... {p}%")) if progress else None)
+    return None
 
 
 # ─── listing / fetching ─────────────────────────────────────────────────────
@@ -125,9 +210,10 @@ def fetch_server(args, progress=None):
 # ─── create / delete / update ───────────────────────────────────────────────
 def create_server(args, progress=None):
     server_dir = None
+    external = False
     try:
         software = args.software
-        err = _validate_settings(port=args.port, ram=args.ram, software=software)
+        err = _validate_settings(port=args.port, ram=args.ram, software=software, heap=getattr(args, "heap", None))
         if err:
             return err
         if not args.version:
@@ -143,14 +229,18 @@ def create_server(args, progress=None):
 
         paths.ensure_dirs()
         sid = _unique_id("srv", paths.SERVERS_DIR)
-        server_dir = os.path.join(paths.SERVERS_DIR, sid)
-        os.makedirs(server_dir)
+        target, external, err = _new_server_dir(getattr(args, "dest", None), args.name, sid)
+        if err:
+            return err
+        os.makedirs(target)
+        server_dir = target
 
         server = {
             "id": sid,
             "name": args.name,
             "port": int(args.port),
             "ram": util.normalize_ram(args.ram),
+            "heap": util.normalize_ram(args.heap) if getattr(args, "heap", None) else None,
             "storageLimit": args.storage or None,
             "software": software,
             "version": args.version,
@@ -160,6 +250,8 @@ def create_server(args, progress=None):
             "created": _now_ms(),
             "dir": server_dir,
         }
+        if external:
+            server["linked"] = True
 
         if args.profile:
             profile_dir = os.path.join(paths.PROFILES_DIR, args.profile)
@@ -180,20 +272,11 @@ def create_server(args, progress=None):
             with open(os.path.join(server_dir, "eula.txt"), "w", encoding="utf-8") as f:
                 f.write("eula=true\n")
 
-        if software == "spigot":
-            err = buildtools.build_spigot(args.version, server_dir, progress,
-                                           java_path=server["javaPath"])
-            if err:
-                _remove_server_dir(server_dir)
-                return err
-        else:
-            if progress:
-                progress(0, "Resolving download URL...")
-            url = resolve_download_url(software, args.version, getattr(args, "unstable", False))
-            if progress:
-                progress(0, "Downloading server jar...")
-            download_file(url, os.path.join(server_dir, "server.jar"),
-                          (lambda p: progress(p, f"Downloading... {p}%")) if progress else None)
+        err = _install_jar(software, args.version, server_dir, progress,
+                           java_path=server["javaPath"], unstable=getattr(args, "unstable", False))
+        if err:
+            _discard_new_dir(server_dir, external)
+            return err
 
         # Re-read under the lock right before saving: the download above can
         # take minutes, and another command may have changed config.json since.
@@ -206,8 +289,7 @@ def create_server(args, progress=None):
     except BaseException as e:
         # Never leave a half-created, unregistered server folder behind
         # (failed download, Ctrl-C, …).
-        if server_dir:
-            _remove_server_dir(server_dir)
+        _discard_new_dir(server_dir, external)
         if not isinstance(e, Exception):
             raise
         return fail("operation_failed", str(e))
@@ -255,11 +337,11 @@ def delete_server(args, progress=None):
         # the world or leaves a process the panel can no longer stop.
         if runstate.is_running(srv["id"]):
             verb = "removing" if keep_files else "deleting"
-            return fail("server_running", f"Server is running — stop it before {verb} it")
+            return fail("server_running", f"Server is running - stop it before {verb} it")
         server_dir = srv["dir"]
         if not keep_files and srv.get("linked") and not _safe_external_dir(server_dir):
             return fail("invalid_path",
-                        f"Refusing to delete {server_dir} — it is (or contains) a protected folder. "
+                        f"Refusing to delete {server_dir} - it is (or contains) a protected folder. "
                         "Remove the server instead to keep its files.")
         with locked_config() as cfg:
             cfg["servers"] = [s for s in cfg.get("servers", []) if s["id"] != args.id]
@@ -281,7 +363,7 @@ def delete_server(args, progress=None):
             except OSError:
                 pass
             return {"success": True, "removed": True, "kept": server_dir,
-                    "message": f"Removed from MCPanel — the files were kept: {server_dir}"}
+                    "message": f"Removed from MCPanel - the files were kept: {server_dir}"}
 
         if srv.get("linked"):
             failed = []
@@ -305,13 +387,18 @@ def delete_server(args, progress=None):
 
 def update_server(args, progress=None):
     try:
-        err = _validate_settings(port=args.port, ram=args.ram, software=args.software)
+        current = find_server(load_config(), args.id)
+        if not current:
+            return {"error": "Server not found", "code": "server_not_found"}
+        heap = getattr(args, "heap", None)
+        # A lower RAM limit must still fit the heap the server keeps.
+        err = _validate_settings(port=args.port, ram=args.ram, software=args.software,
+                                 heap=heap if heap is not None else (current.get("heap") if args.ram else None),
+                                 ram_for_heap=current.get("ram"))
         if err:
             return err
         if args.name is not None and not args.name.strip():
             return fail("invalid_name", "Name cannot be empty")
-        if not find_server(load_config(), args.id):
-            return {"error": "Server not found", "code": "server_not_found"}
 
         updates = {}
         if args.name is not None:
@@ -320,6 +407,8 @@ def update_server(args, progress=None):
             updates["port"] = int(args.port)
         if args.ram is not None:
             updates["ram"] = util.normalize_ram(args.ram)
+        if heap is not None:
+            updates["heap"] = util.normalize_ram(heap) if heap.strip() else None
         if args.software is not None:
             updates["software"] = args.software
         if args.version is not None:
@@ -353,34 +442,70 @@ def update_server(args, progress=None):
 
 
 def duplicate_server(args, progress=None):
+    """Clone a server: copy its folder under a new name, optionally to another
+    location (-dest) and/or switched to another version of the same software
+    (-v — the copy gets a freshly downloaded jar; worlds and configs are
+    copied as-is, so going DOWN a version is at the user's own risk)."""
     new_dir = None
+    external = False
     try:
+        if not (args.name or "").strip():
+            return fail("invalid_name", "Name is required (-t)")
         src = find_server(load_config(), args.id)
         if not src:
             return {"error": "Server not found", "code": "server_not_found"}
         if not os.path.isdir(src["dir"]):
             return fail("server_dir_missing", f"Server folder is missing: {src['dir']}")
+        version = (getattr(args, "version", None) or "").strip() or None
+        if version == src.get("version"):
+            version = None
+        if version and src.get("software") not in SOFTWARE:
+            return fail("invalid_software",
+                        f"Can't switch versions: unknown software '{src.get('software')}'")
+        paths.ensure_dirs()
         new_id = _unique_id("srv", paths.SERVERS_DIR)
-        new_dir = os.path.join(paths.SERVERS_DIR, new_id)
-        os.makedirs(new_dir)
+        target, external, err = _new_server_dir(getattr(args, "dest", None), args.name, new_id)
+        if err:
+            return err
+        os.makedirs(target)
+        new_dir = target
         if progress:
             progress(0, "Copying server files…")
         # copy_dir skips profile.json and the manifest, so the copy gets its own
         util.copy_dir(src["dir"], new_dir)
-        if progress:
-            progress(100, "Done!")
+
         new_server = {**src, "id": new_id, "name": args.name, "dir": new_dir, "created": _now_ms()}
         # The copy is a different server: it isn't registered in the proxy
         # (velocity.toml still points at the original) and has never booted.
         new_server.pop("velocityLink", None)
         new_server.pop("lastBoot", None)
+        # Ownership follows where the copy lives, not where the source did.
+        new_server.pop("linked", None)
+        if external:
+            new_server["linked"] = True
+
+        if version:
+            # resolve_jar may have picked a custom-named jar; the new one is
+            # always server.jar, which resolve_jar prefers, so drop the old one.
+            old_jar, _ = util.resolve_jar(new_server)
+            err = _install_jar(src["software"], version, new_dir, progress,
+                               java_path=src.get("javaPath") or "java",
+                               unstable=getattr(args, "unstable", False))
+            if err:
+                _discard_new_dir(new_dir, external)
+                return err
+            if old_jar and os.path.basename(old_jar) != "server.jar" and os.path.exists(old_jar):
+                os.remove(old_jar)
+            new_server["version"] = version
+
         with locked_config() as cfg:
             cfg.setdefault("servers", []).append(new_server)
         write_server_manifest(new_server)
+        if progress:
+            progress(100, "Done!")
         return {"success": True, "server": new_server}
     except BaseException as e:
-        if new_dir:
-            _remove_server_dir(new_dir)
+        _discard_new_dir(new_dir, external)
         if not isinstance(e, Exception):
             raise
         return fail("operation_failed", str(e))
@@ -413,7 +538,7 @@ def import_server(args, progress=None):
                     return fail("server_already_registered",
                                 f"That folder is already registered as \"{s.get('name')}\" ({s['id']})")
             if not os.access(src, os.W_OK):
-                return fail("invalid_path", f"MCPanel can't write to {src} — it needs to, to run the server")
+                return fail("invalid_path", f"MCPanel can't write to {src} - it needs to, to run the server")
         err = _validate_settings(port=args.port, ram=args.ram, software=args.software)
         if err:
             return err
@@ -491,7 +616,7 @@ def _spawn_supervisor(server_id, timeout=8.0):
     # refuse with "already running" — or, before the lock existed, have the
     # old one delete the new one's state files on its way out.
     if not runstate.wait_supervisor_exit(server_id, timeout=10):
-        return {"error": "Previous instance is still shutting down — try again in a moment",
+        return {"error": "Previous instance is still shutting down - try again in a moment",
                 "code": "still_stopping"}
     try:
         os.remove(runstate.boot_err_path(server_id))
@@ -767,12 +892,29 @@ def _server_cpu_pct(server_id, pid):
     return round(pct, 1)
 
 
+def _max_players(srv):
+    """The player cap the server advertises: max-players in server.properties,
+    or show-max-players in velocity.toml - or, before the first start has
+    written that file, the default the server will use (20 / Velocity's 500)."""
+    if srv.get("software") == "velocity":
+        path, pattern, default = (os.path.join(srv["dir"], "velocity.toml"),
+                                  r"^\s*show-max-players\s*=\s*(\d+)", 500)
+    else:
+        path, pattern, default = (os.path.join(srv["dir"], "server.properties"),
+                                  r"^max-players\s*=\s*(\d+)", 20)
+    m = re.search(pattern, _read_text(path) or "", re.M)
+    return int(m.group(1)) if m else default
+
+
 def get_server_dir_stats(args, progress=None):
     cfg = load_config()
     srv = find_server(cfg, args.id)
     if not srv or not os.path.exists(srv["dir"]):
         return {"size": 0}
-    result = {"size": util.get_dir_size(srv["dir"])}
+    # --no-size: the server cards refresh RAM every few seconds, and walking a
+    # world folder each time would cost far more than the numbers are worth.
+    result = {} if getattr(args, "no_size", False) else {"size": util.get_dir_size(srv["dir"])}
+    result["maxPlayers"] = _max_players(srv)
     st = runstate.read_state(srv["id"])
     if st:
         pid = st.get("javaPid")
@@ -1047,8 +1189,19 @@ def _add_server_to_velocity_toml(content, server_name, server_address, priority)
     list. Every edit stays inside [servers]: the old whole-file regexes would
     delete a same-named top-level key (a server called "motd" or "bind" took
     Velocity's own setting with it), and a missing [servers] table used to be
-    *prepended*, which pulled every top-level setting into it."""
+    *prepended*, which pulled every top-level setting into it.
+
+    A missing [forced-hosts] table is added empty: Velocity otherwise falls
+    back to its built-in forced hosts (lobby/factions/minigames.example.com),
+    which point at servers our [servers] table no longer has, and refuses to
+    start."""
     lines = content.splitlines()
+    if _toml_section(lines, "forced-hosts") is None:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        if lines:
+            lines.append("")
+        lines.append("[forced-hosts]")
     entry = f'{server_name} = "{server_address}"'
     span = _toml_section(lines, "servers")
     if span is None:
@@ -1094,6 +1247,101 @@ def _add_server_to_velocity_toml(content, server_name, server_address, priority)
 
     lines[start + 1:end] = body
     return "\n".join(lines) + "\n"
+
+
+def _remove_server_from_velocity_toml(content, server_name):
+    """Undo `_add_server_to_velocity_toml`: drop `server_name` from [servers]
+    and its try list, and from every [forced-hosts] list. A forced host still
+    naming the server would stop Velocity from starting, so one left with an
+    empty list is removed entirely."""
+    lines = content.splitlines()
+    name_re = re.compile(r'"([^"]+)"')
+
+    def strip_lists(start, end, keep_key):
+        """Rewrite every `key = [...]` in lines[start:end] without server_name
+        (lists may span several lines). Returns the new body."""
+        body, out, i = lines[start:end], [], 0
+        while i < len(body):
+            m = re.match(r'^(\s*)([^=\s][^=]*?)\s*=\s*\[', body[i])
+            if not m:
+                out.append(body[i])
+                i += 1
+                continue
+            j = i
+            while j < len(body) and "]" not in body[j]:
+                j += 1
+            if j >= len(body):
+                raise ValueError(f"velocity.toml: unterminated list '{m.group(2)}'")
+            items = name_re.findall(" ".join(body[i:j + 1]).split("=", 1)[1])
+            if server_name in items:
+                items = [x for x in items if x != server_name]
+                if items or keep_key(m.group(2).strip()):
+                    out.append(f"{m.group(1)}{m.group(2)} = [" + ", ".join(f'"{x}"' for x in items) + "]")
+            else:
+                out.extend(body[i:j + 1])
+            i = j + 1
+        return out
+
+    span = _toml_section(lines, "servers")
+    if span:
+        start, end = span
+        key_re = re.compile(r'^\s*(["\']?)' + re.escape(server_name) + r'\1\s*=')
+        body = strip_lists(start + 1, end, lambda key: key == "try")
+        lines[start + 1:end] = [ln for ln in body if not key_re.match(ln)]
+    span = _toml_section(lines, "forced-hosts")
+    if span:
+        start, end = span
+        lines[start + 1:end] = strip_lists(start + 1, end, lambda key: False)
+    return "\n".join(lines) + "\n"
+
+
+def _set_velocity_server_port(content, server_name, port):
+    """Point `server_name`'s [servers] entry at `port`, keeping its host.
+    Returns (new_content, old_address, new_address)."""
+    lines = content.splitlines()
+    span = _toml_section(lines, "servers")
+    if span is None:
+        raise ValueError("velocity.toml has no [servers] table")
+    start, end = span
+    key_re = re.compile(r'^(\s*(["\']?)' + re.escape(server_name) + r'\2\s*=\s*)"([^"]*)"(.*)$')
+    for i in range(start + 1, end):
+        m = key_re.match(lines[i])
+        if not m:
+            continue
+        old = m.group(3)
+        am = _ADDRESS_RE.match(old)
+        host = am.group(1) if am else (old.rsplit(":", 1)[0] if ":" in old else old)
+        new = f"{host}:{port}"
+        lines[i] = f'{m.group(1)}"{new}"{m.group(4)}'
+        return "\n".join(lines) + "\n", old, new
+    raise ValueError(f"'{server_name}' is not registered in the proxy's [servers] table")
+
+
+def _disable_paper_velocity_yml(content):
+    """Switch `proxies.velocity.enabled` off in paper-global.yml and blank the
+    secret (Paper's default is ''), so the proxy's secret doesn't linger in a
+    server that no longer uses it. No velocity block means forwarding was
+    never on, so the file is returned unchanged."""
+    lines = content.splitlines()
+    proxies = _yaml_find_key(lines, 0, len(lines), "proxies", 0)
+    if proxies is None:
+        return content
+    b_start, b_end = _yaml_child_block(lines, proxies)
+    child_indent = next((_indent_of(lines[i]) for i in range(b_start, b_end)
+                         if _yaml_is_content(lines[i])), 2)
+    vel = _yaml_find_key(lines, b_start, b_end, "velocity", child_indent)
+    if vel is None:
+        return content
+    v_start, v_end = _yaml_child_block(lines, vel)
+    key_indent = next((_indent_of(lines[i]) for i in range(v_start, v_end)
+                       if _yaml_is_content(lines[i])), child_indent + 2)
+    changed = False
+    for key, value in (("enabled", "false"), ("secret", "''")):
+        idx = _yaml_find_key(lines, v_start, v_end, key, key_indent)
+        if idx is not None:
+            lines[idx] = " " * key_indent + f"{key}: {value}"
+            changed = True
+    return "\n".join(lines) + "\n" if changed else content
 
 
 def _ensure_modern_forwarding(content):
@@ -1331,7 +1579,7 @@ def link_to_proxy(args, progress=None):
         if not paper_srv:
             return _link_error("Server not found", "server_not_found")
         if paper_srv.get("software") not in PAPER_SOFTWARES:
-            hint = (" — Spigot has no Velocity modern forwarding; use Paper (or a fork) instead"
+            hint = (" - Spigot has no Velocity modern forwarding; use Paper (or a fork) instead"
                     if paper_srv.get("software") == "spigot" else "")
             return _link_error(f"'{paper_srv.get('software')}' is not a Paper-based server{hint}",
                                "not_paper")
@@ -1344,7 +1592,7 @@ def link_to_proxy(args, progress=None):
             return _link_error("A server cannot be linked to itself", "invalid_target")
         toml_file = os.path.join(vel_srv["dir"], "velocity.toml")
         if not os.path.exists(toml_file):
-            return _link_error("velocity.toml not found — start Velocity once to generate it",
+            return _link_error("velocity.toml not found - start Velocity once to generate it",
                                "velocity_toml_missing")
         secret = _extract_velocity_secret_from_dir(vel_srv["dir"])
         if not secret:
@@ -1356,7 +1604,7 @@ def link_to_proxy(args, progress=None):
                 re.sub(r'[^a-z0-9_-]', '-', paper_srv["name"].lower()).strip('-') or "server"
             )[:64]
         if not _VELOCITY_NAME_RE.match(server_name):
-            return _link_error(f"Invalid server name {server_name!r} — use letters, digits, '-' or '_'",
+            return _link_error(f"Invalid server name {server_name!r} - use letters, digits, '-' or '_'",
                                "invalid_server_name")
         custom = (args.custom_ip or "").strip()
         # A bare host (what the desktop/web link dialog asks for) gets the
@@ -1366,7 +1614,7 @@ def link_to_proxy(args, progress=None):
         server_address = custom or f"127.0.0.1:{paper_srv['port']}"
         m = _ADDRESS_RE.match(server_address)
         if not m or not util.is_valid_port(m.group(2)):
-            return _link_error(f"Invalid address {server_address!r} — expected host:port",
+            return _link_error(f"Invalid address {server_address!r} - expected host:port",
                                "invalid_address")
         priority = int(args.priority) if args.priority is not None else 999
 
@@ -1415,13 +1663,119 @@ def link_to_proxy(args, progress=None):
         return _link_error(
             f"Proxy link failed while writing {step}: {e}. "
             + ("All changes were rolled back." if not rollback_errors
-               else "Rollback was incomplete — check the files listed in rollbackErrors."),
+               else "Rollback was incomplete - check the files listed in rollbackErrors."),
             "proxy_link_failed",
             failedStep=step,
             rolledBack=not rollback_errors,
             rollbackErrors=rollback_errors,
         )
     return {"success": True, "serverName": server_name, "address": server_address}
+
+
+def sync_proxy_port(args, progress=None):
+    """After a linked server's port changed, point its velocity.toml entry at
+    the new port (the host — 127.0.0.1 or a custom IP — is kept)."""
+    try:
+        cfg = load_config()
+        srv = find_server(cfg, args.id)
+        if not srv:
+            return fail("server_not_found")
+        link = srv.get("velocityLink")
+        if not isinstance(link, dict) or not link.get("serverName"):
+            return _link_error("This server is not linked to a Velocity proxy", "not_linked")
+        vel_srv = find_server(cfg, link.get("velocityId"))
+        if not vel_srv:
+            return _link_error("The linked Velocity proxy no longer exists", "velocity_not_found")
+        port = args.port if args.port is not None else srv.get("port")
+        if not util.is_valid_port(port):
+            return _link_error(f"Invalid port {port!r}", "invalid_port")
+        toml_file = os.path.join(vel_srv["dir"], "velocity.toml")
+        if not os.path.exists(toml_file):
+            return _link_error("velocity.toml not found - start Velocity once to generate it",
+                               "velocity_toml_missing")
+        try:
+            new_toml, old, new = _set_velocity_server_port(_read_text(toml_file), link["serverName"], port)
+        except ValueError as e:
+            return _link_error(f"Nothing was changed: {e}", "proxy_config_invalid")
+        if old != new:
+            util.atomic_write_text(toml_file, new_toml)
+        return {"success": True, "serverName": link["serverName"], "velocityId": vel_srv["id"],
+                "oldAddress": old, "address": new, "changed": old != new}
+    except Exception as e:
+        return fail("operation_failed", str(e))
+
+
+def unlink_from_proxy(args, progress=None):
+    """Undo `link_to_proxy`: remove the server from the proxy's velocity.toml,
+    turn Velocity forwarding off in paper-global.yml, set online-mode back to
+    true and drop `velocityLink`. Same all-or-nothing transaction as the link.
+    A proxy that no longer exists (or has no velocity.toml) is skipped, so a
+    stale link can always be cleared."""
+    try:
+        cfg = load_config()
+        paper_srv = find_server(cfg, args.id)
+        if not paper_srv:
+            return _link_error("Server not found", "server_not_found")
+        link = paper_srv.get("velocityLink")
+        if not isinstance(link, dict):
+            return _link_error("This server is not linked to a Velocity proxy", "not_linked")
+        server_name = link.get("serverName") or ""
+        vel_srv = find_server(cfg, link.get("velocityId"))
+        toml_file = os.path.join(vel_srv["dir"], "velocity.toml") if vel_srv else None
+        props_file = os.path.join(paper_srv["dir"], "server.properties")
+        yml_file = os.path.join(paper_srv["dir"], "config", "paper-global.yml")
+        try:
+            new_toml = None
+            if toml_file and server_name and os.path.exists(toml_file):
+                new_toml = _remove_server_from_velocity_toml(_read_text(toml_file), server_name)
+            new_props = _set_server_property_text(_read_text(props_file), "online-mode", "true")
+            new_yml = None
+            if os.path.exists(yml_file):
+                new_yml = _disable_paper_velocity_yml(_read_text(yml_file))
+        except (OSError, ValueError) as e:
+            return _link_error(f"Nothing was changed: {e}", "proxy_config_invalid")
+    except Exception as e:
+        return fail("operation_failed", str(e))
+
+    txn = _FileTransaction()
+    step = None
+    try:
+        if new_toml is not None:
+            step = "velocity.toml"
+            txn.write(toml_file, new_toml)
+        step = "server.properties"
+        txn.write(props_file, new_props)
+        if new_yml is not None:
+            step = "paper-global.yml"
+            txn.write(yml_file, new_yml)
+        step = "config.json"
+        with locked_config() as cfg:
+            entry = find_server(cfg, args.id)
+            if entry is None:
+                raise RuntimeError("server was deleted while unlinking")
+            entry.pop("velocityLink", None)
+        write_server_manifest(entry)
+    except BaseException as e:
+        rollback_errors = txn.rollback()
+        try:
+            from . import applog
+            applog.error(f"proxy unlink {args.id} failed at {step}: {e}; "
+                         f"rollback {'failed: ' + '; '.join(rollback_errors) if rollback_errors else 'ok'}")
+        except Exception:
+            pass
+        if not isinstance(e, Exception):
+            raise
+        return _link_error(
+            f"Proxy unlink failed while writing {step}: {e}. "
+            + ("All changes were rolled back." if not rollback_errors
+               else "Rollback was incomplete - check the files listed in rollbackErrors."),
+            "proxy_unlink_failed",
+            failedStep=step,
+            rolledBack=not rollback_errors,
+            rollbackErrors=rollback_errors,
+        )
+    return {"success": True, "serverName": server_name,
+            "velocityId": link.get("velocityId"), "proxyFound": vel_srv is not None}
 
 
 def open_server_folder(args, progress=None):

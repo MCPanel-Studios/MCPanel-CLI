@@ -2,7 +2,7 @@
 
 Addons extend the CLI with new command groups. Because the CLI *is* MCPanel's
 backend, an addon that adds `mcpanel api foo bar` automatically becomes callable
-from the desktop app and the WebUI too — there is no second integration to write.
+from the desktop app and the WebUI too - there is no second integration to write.
 
 The accounts/permissions system that MCPanel-WebUI depends on is itself an addon,
 shipped separately as [MCPanel-Accounts](https://github.com/DippyCoder/MCPanel-Accounts)
@@ -18,7 +18,7 @@ shipped separately as [MCPanel-Accounts](https://github.com/DippyCoder/MCPanel-A
 | User-installed | `<userData>/addons/<name>/__init__.py` | package addon |
 | pip-installed | any distribution exposing the `mcpanel.addons` entry-point group | preferred for real addons |
 
-`<userData>` is the same directory the panel uses — `~/.config/mcpanel` on
+`<userData>` is the same directory the panel uses - `~/.config/mcpanel` on
 Linux, `%APPDATA%\mcpanel` on Windows, `~/Library/Application Support/mcpanel`
 on macOS. Override with `MCPANEL_HOME`.
 
@@ -41,7 +41,7 @@ ADDON = {
     "description": "User accounts and permissions",
     "author":      "DippyCoder",
     "url":         "https://github.com/...",
-    "api_version": 1,                   # required — see "Versioning"
+    "api_version": 1,                   # required - see "Versioning"
 }
 
 
@@ -50,8 +50,8 @@ def register(api):
     ...
 ```
 
-`register()` is called **twice** per process — once for the human command tree
-and once for the `api` (JSON) tree — because the CLI mounts one tree twice. Do
+`register()` is called **twice** per process - once for the human command tree
+and once for the `api` (JSON) tree - because the CLI mounts one tree twice. Do
 not keep state between calls; treat `register()` as pure command wiring.
 
 Optional module-level hooks, all called at most once per process:
@@ -91,10 +91,10 @@ to `api.command()`. Use one group per addon; nest with
 
 Registers a leaf command. Returns the `ArgumentParser` so you can add arguments.
 
-- `func(args, progress) -> dict` — the handler. `progress` is `None` unless
+- `func(args, progress) -> dict` - the handler. `progress` is `None` unless
   `progress_ok=True` and the command is running in human mode; when it is
   callable, call `progress(percent, status)`.
-- `action` — a unique string identifying this command. It is what
+- `action` - a unique string identifying this command. It is what
   `api.renderer()` keys on, and it appears in `args.action`.
 - Return a plain JSON-serialisable `dict`. Returning `{"error": "..."}` makes
   the CLI exit non-zero, exactly as for built-in commands.
@@ -105,7 +105,22 @@ Registers a leaf command. Returns the `ArgumentParser` so you can add arguments.
 
 Registers the human-readable printer for an `action`. `fn(result, args)` prints
 whatever it likes. Without one, the CLI falls back to a generic pretty-printer,
-so a renderer is optional — JSON mode never uses it.
+so a renderer is optional - JSON mode never uses it.
+
+### `api.machine` *(CLI 1.5.0+)*
+
+`True` while `register()` is mounting into the `mcpanel api …` tree (JSON -
+what MCPanel and the WebUI call), `False` for the human tree people type in.
+An addon that only exists to back its own UI can keep its commands out of the
+terminal with:
+
+```python
+def register(api):
+    if not getattr(api, "machine", True):
+        return
+```
+
+(`getattr` so it still registers on older CLIs, which don't set it.)
 
 ### `api.helpers`
 
@@ -118,7 +133,7 @@ looks native.
 
 ### `api.data_dir(name) -> str`
 
-Returns (and creates) `<userData>/addon-data/<name>/` — where an addon should
+Returns (and creates) `<userData>/addon-data/<name>/` - where an addon should
 put its database, cache or config. Never write outside it.
 
 ### `api.errors(codes)` *(CLI 1.4.0+)*
@@ -134,7 +149,7 @@ Every API error uses one shape:
 ```
 
 A handler fails either by **returning** that dict, or by **raising** any
-exception that has a string `code` attribute — the CLI turns it into the same
+exception that has a string `code` attribute - the CLI turns it into the same
 document (an exception without one becomes `internal_error`). Always put a
 complete sentence in `error`: MCPanel and MCPanel-WebUI display it verbatim
 and only branch on `code`, which is what lets a new code you ship today show
@@ -162,7 +177,7 @@ ADDON = {
 ```
 
 Paths are relative to the addon folder (max 2 MB each). The apps fetch them
-with `mcpanel api addons ui --product mcpanel|webui` at startup — after
+with `mcpanel api addons ui --product mcpanel|webui` at startup - after
 installing or updating an addon, reload the app to pick up UI changes.
 
 Each script runs in its own function scope with `addon` (`{name, version,
@@ -199,13 +214,13 @@ Also available: `A.product` (`'mcpanel'` | `'webui'`), `A.servers()`,
 
 **Theming.** Everything renders inside the panel's own DOM, so the user's
 selected theme applies automatically. Use the theme's CSS variables rather than
-fixed colours — `--bg-base`, `--bg-elevated`, `--bg-hover`, `--border`,
+fixed colours - `--bg-base`, `--bg-elevated`, `--bg-hover`, `--border`,
 `--text-primary`, `--text-secondary`, `--text-muted`, `--accent`,
 `--accent-dim`, `--accent-rgb`, `--green`, `--red`, `--orange`, `--radius`,
-`--font-display`, `--font-mono` — and the panel's classes (`.card`,
+`--font-display`, `--font-mono` - and the panel's classes (`.card`,
 `.btn-primary`, `.btn-ghost`, `.btn-sm`, `.input`, `.page-header`).
 
-**Trust.** UI scripts run with the app's full privileges — in the WebUI, with
+**Trust.** UI scripts run with the app's full privileges - in the WebUI, with
 the signed-in user's session (the WebUI's permission checks still apply to
 what they call). This is part of what the third-party disclaimer covers.
 
@@ -240,13 +255,13 @@ Addons are third-party code running inside the backend that manages people's
 servers, so the loader is defensive by design:
 
 - an addon that fails to import is skipped, recorded with its traceback, and
-  reported by `addons list` — the CLI still starts
+  reported by `addons list` - the CLI still starts
 - an addon whose `register()` raises is skipped the same way, and any commands
   it managed to mount before raising are left in place only if they are
   complete
 - a duplicate `ADDON["name"]` loses to whichever addon loaded first, and the
   conflict is reported
-- `MCPANEL_NO_ADDONS=1` disables addon loading entirely — the escape hatch when
+- `MCPANEL_NO_ADDONS=1` disables addon loading entirely - the escape hatch when
   a bad addon makes the CLI unusable
 
 Addons are **not** sandboxed. An addon can do anything the user running

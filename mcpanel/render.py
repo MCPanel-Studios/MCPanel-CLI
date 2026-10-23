@@ -104,11 +104,17 @@ def render_create_server(result, args):
     if _err(result):
         return
     s = result.get("server", {})
-    verb = "Linked" if s.get("linked") else ("Imported" if "detected" in result else "Created")
+    imported = "detected" in result
+    if imported:
+        verb = "Linked" if s.get("linked") else "Imported"
+    else:
+        verb = "Cloned" if args is not None and getattr(args, "action", None) == "duplicate-server" else "Created"
     print(green("✓ ") + f"{verb} server {bold(s.get('name'))} "
           + dim(f"({s.get('id')})  {s.get('software')} {s.get('version')}  {s.get('ram')} RAM  port {s.get('port')}"))
-    if s.get("linked"):
+    if imported and s.get("linked"):
         print(dim(f"  using {s.get('dir')} in place (remove it with: mcpanel delete server -id {s.get('id')} --keep-files)"))
+    elif s.get("linked"):
+        print(dim(f"  folder: {s.get('dir')}"))
 
 
 def render_success(result, args):
@@ -120,6 +126,8 @@ def render_success(result, args):
         return
     if isinstance(result, dict) and result.get("message"):
         print(green("✓ ") + result["message"])
+        if result.get("warning"):
+            print(yellow("⚠ ") + result["warning"])
         return
     print(green("✓ done"))
 
@@ -131,7 +139,7 @@ def render_started(result, args):
         return
     if _err(result):
         return
-    print(green("✓ ") + "server starting — follow output with: "
+    print(green("✓ ") + "server starting - follow output with: "
           + cyan(f"mcpanel logs server -id {getattr(args, 'id', '')} -f"))
 
 
@@ -209,7 +217,7 @@ def render_log_files(result, args):
         return
     files = result.get("files", [])
     if not files:
-        print(dim("No log files yet — the server writes them to its logs/ folder once it has run."))
+        print(dim("No log files yet - the server writes them to its logs/ folder once it has run."))
         return
     print(bold(f"{'FILE':<32} {'SIZE':>10}  MODIFIED"))
     for f in files:
@@ -347,7 +355,7 @@ def render_jdk_compat(result, args):
         if not j.get("compatible") and j.get("reason"):
             print(dim(f"      {j['reason']}"))
     if not recommended:
-        print(yellow("\n  ⚠ No detected JDK satisfies this requirement — install one and re-run."))
+        print(yellow("\n  ⚠ No detected JDK satisfies this requirement - install one and re-run."))
 
 
 def render_system(result, args):
@@ -366,6 +374,24 @@ def render_check_update(result, args):
         print(yellow("  ⚠ Update available: ") + (result.get("url") or ""))
     else:
         print(green("  ✓ Up to date"))
+
+
+def render_updateapp(result, args):
+    if isinstance(result, dict) and "results" in result:
+        rows = result["results"]       # every product: errors are per row
+    elif _err(result):
+        return
+    else:
+        rows = [result]
+    if not rows:
+        print(dim("  Nothing to update - no MCPanel products found here"))
+    for r in rows:
+        if r.get("error"):
+            print(red(f"  ✗ {r.get('name', '?')}: ") + r["error"])
+        elif r.get("updated"):
+            print(green("  ✓ ") + r["message"])
+        else:
+            print(dim("  · ") + r["message"])
 
 
 def render_buildtools_version(result, args):
@@ -409,7 +435,7 @@ def render_shutdown(result, args):
         print(green("✓ ") + f"stopped  {sid}")
     for f in failed:
         print(yellow("⚠ ") + f"could not stop {f['id']}: {f.get('error','')}")
-    print(dim(f"Shutdown complete — {len(stopped)} server{'s' if len(stopped) != 1 else ''} stopped."))
+    print(dim(f"Shutdown complete - {len(stopped)} server{'s' if len(stopped) != 1 else ''} stopped."))
 
 
 # ─── plugin / mod renderers ──────────────────────────────────────────────────
@@ -434,17 +460,80 @@ def render_plugin_search(result, args, kind="plugin"):
         if r.get("description"):
             print(dim("  " + r["description"][:80]))
         if r.get("external") and r.get("externalUrl"):
-            print(dim(f"  hosted externally — can't auto-install: {r['externalUrl']}"))
+            print(dim(f"  hosted externally - can't auto-install: {r['externalUrl']}"))
     # Inside the TUI the same command is spelled /install, not mcpanel install.
     prefix = "/" if getattr(args, "tui", False) else "mcpanel "
     print(dim(f"\nInstall: {prefix}install {kind} <platform> <slug> -id <serverid>"))
 
 
+def _render_dep_lines(result):
+    for d in result.get("dependencies") or []:
+        print(green("  + ") + f"{d['name']} {d.get('version') or ''}".rstrip() + dim(f"  → {d.get('path', '')}"))
+    for d in result.get("failedDependencies") or []:
+        print(red("  ✗ ") + f"dependency {d['name']}: {d['error']}")
+    for d in result.get("missingDependencies") or []:
+        hint = f" - get it from {d['url']}" if d.get("url") else ""
+        print(yellow("  ⚠ ") + f"dependency {d['name']} needs a manual install ({d['reason']}){hint}")
+
+
 def render_install_plugin(result, args):
+    if isinstance(result, dict) and result.get("code") == "disclaimer_required":
+        print(red("✗ ") + result["error"])
+        print(dim("\n" + result.get("disclaimer", "")))
+        if result.get("dependencies"):
+            print(dim("Would also install: " + ", ".join(d["name"] for d in result["dependencies"])))
+        if result.get("tos"):
+            print(dim(f"Terms: {result['tos']}"))
+        return
     if _err(result):
         return
     print(green("✓ ") + f"Installed {bold(result.get('filename', result.get('slug', '?')))} "
           + dim(f"→ {result.get('path', '')}"))
+    _render_dep_lines(result)
+
+
+def render_plugins_list(result, args):
+    if _err(result):
+        return
+    items = result.get("plugins", [])
+    if not items:
+        print(dim(f"No {result.get('kind', 'plugin')}s installed through MCPanel."))
+        return
+    print(bold(f"{'NAME':<26} {'PLATFORM':<10} {'ID':<24} VERSION"))
+    for r in items:
+        print(f"{(r.get('name') or '')[:25]:<26} {r.get('platform', ''):<10} "
+              f"{str(r.get('id', ''))[:23]:<24} {r.get('version') or ''}")
+        if r.get("dependencies"):
+            print(dim("  needs: " + ", ".join(r["dependencies"])))
+
+
+def render_plugins_uninstall(result, args):
+    if _err(result):
+        return
+    print(green("✓ ") + f"Uninstalled {bold(result.get('name', '?'))}" + dim(f"  ({result.get('path', '')})"))
+
+
+def _render_update_line(u):
+    if u.get("error"):
+        print(red("✗ ") + f"{u['name']}: {u['error']}")
+    elif u.get("unchanged"):
+        print(dim(f"= {u['name']} {u.get('version') or ''} (up to date)"))
+    else:
+        print(green("✓ ") + f"{u['name']} {u.get('previousVersion') or '?'} → {bold(u.get('version') or '?')}")
+        _render_dep_lines(u)
+
+
+def render_plugins_update(result, args):
+    if "updated" in result:
+        rows = result["updated"] + result["failed"] + result["unchanged"]
+        if not rows:
+            print(dim("Nothing installed through MCPanel."))
+        for u in rows:
+            _render_update_line(u)
+        return
+    if _err(result):
+        return
+    _render_update_line(result)
 
 
 def render_plugin_info(result, args):
@@ -461,7 +550,7 @@ def render_plugin_info(result, args):
             changelog = (v.get("changelog") or "").replace("\n", " ")[:60]
             print(f"{name:<20} {date:<12} {changelog}")
     if result.get("hasMoreVersions"):
-        print(dim("(more versions available — increase -n or use -o to page)"))
+        print(dim("(more versions available - increase -n or use -o to page)"))
     if result.get("websiteUrl"):
         print(dim(f"\nWebsite: {result['websiteUrl']}"))
 
@@ -487,6 +576,22 @@ def render_proxy_link(result, args):
         return
     print(green("✓ ") + f"Linked as {bold(result.get('serverName', '?'))} "
           + dim(f"→ {result.get('address', '')}"))
+
+
+def render_proxy_unlink(result, args):
+    if _err(result):
+        return
+    print(green("✓ ") + f"Unlinked {bold(result.get('serverName') or '?')} from its proxy")
+
+
+def render_proxy_sync_port(result, args):
+    if _err(result):
+        return
+    if not result.get("changed"):
+        print(dim(f"{result.get('serverName')} already points at {result.get('address')}"))
+        return
+    print(green("✓ ") + f"{bold(result.get('serverName', '?'))} "
+          + dim(f"{result.get('oldAddress')} → {result.get('address')}"))
 
 
 def render_errors(result, args):
@@ -581,8 +686,8 @@ def render_addons_info(result, args):
         ("source", a.get("source", "")),
         ("location", a.get("location", "")),
         ("api version", str(a.get("apiVersion", ""))),
-        ("author", a.get("author", "") or dim("—")),
-        ("url", a.get("url", "") or dim("—")),
+        ("author", a.get("author", "") or dim("-")),
+        ("url", a.get("url", "") or dim("-")),
     ]
     if a.get("declaredName"):
         rows.append(("declared name", yellow(a["declaredName"]) + dim("  (differs from install name)")))
@@ -616,7 +721,7 @@ def render_addons_install(result, args):
     a = result.get("addon") or {}
     print(green("✓ ") + "Installed addon " + bold(result.get("name", "")))
     if a and a.get("status") != "loaded":
-        print(yellow("! ") + f"but it did not load ({a.get('status')}) — "
+        print(yellow("! ") + f"but it did not load ({a.get('status')}) - "
               f"run: mcpanel addons info {result.get('name', '')}")
 
 
@@ -676,6 +781,7 @@ RENDERERS = {
     "system": render_system,
     "app-version": render_app_version,
     "check-update": render_check_update,
+    "updateapp": render_updateapp,
     "debug-first-start": render_success,
     "shutdown": render_shutdown,
     "discover": render_discover,
@@ -683,9 +789,14 @@ RENDERERS = {
     "search-mods": lambda r, a: render_plugin_search(r, a, "mod"),
     "install-plugin": render_install_plugin,
     "install-mod": render_install_plugin,
+    "plugins-list": render_plugins_list,
+    "plugins-uninstall": render_plugins_uninstall,
+    "plugins-update": render_plugins_update,
     "info-plugin": render_plugin_info,
     "proxy-info": render_proxy_info,
     "proxy-link": render_proxy_link,
+    "proxy-unlink": render_proxy_unlink,
+    "proxy-sync-port": render_proxy_sync_port,
     "errors": render_errors,
     "completion-bash": render_completion,
     "completion-zsh": render_completion,
@@ -732,7 +843,7 @@ def render_generic(result, args):
             if isinstance(value, bool):
                 shown = green("yes") if value else dim("no")
             elif value is None or value == "":
-                shown = dim("—")
+                shown = dim("-")
             else:
                 shown = str(value)
             print(f"  {dim(key.ljust(width))}  {shown}")

@@ -196,7 +196,7 @@ class Supervisor:
             except OSError as e:
                 sock.close()
                 raise OSError(f"could not create control socket {sp} ({e}). Unix socket paths "
-                              "are limited to ~107 characters — use a shorter MCPANEL_HOME") from e
+                              "are limited to ~107 characters - use a shorter MCPANEL_HOME") from e
         else:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.bind(("127.0.0.1", 0))

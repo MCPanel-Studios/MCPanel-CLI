@@ -128,7 +128,7 @@ def upload_log(args, progress=None):
     except (OSError, EOFError, gzip.BadGzipFile) as e:
         return fail("log_unreadable", f"Could not read {name}: {e}")
     if not any(l.strip() for l in lines):
-        return fail("log_empty", f"{name} is empty — nothing to upload.")
+        return fail("log_empty", f"{name} is empty - nothing to upload.")
 
     kept = _tail_within(lines, UPLOAD_MAX_LINES, UPLOAD_MAX_BYTES)
     content = "\n".join(kept)

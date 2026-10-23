@@ -2,24 +2,57 @@
 functions in main.js. No third-party dependencies."""
 
 import json
+import re
 import urllib.request
 
-USER_AGENT = "MCPanel/2.1 (https://github.com/DippyCoder/MCPanel; planewriter255@gmail.com)"
+USER_AGENT = "MCPanel/2.1 (https://github.com/DippyCoder/MCPanel; dippycoder@gmail.com)"
+
+# The MCPanel repositories are moving from the DippyCoder account to the
+# MCPanel-Studios organisation. Every GitHub URL under the old owner is tried
+# at the organisation first and only then at its old path, so fetches keep
+# working before, during and after the move.
+GITHUB_ORG = "MCPanel-Studios"
+_OLD_OWNER_RE = re.compile(
+    r"^(https://(?:api\.github\.com/repos|github\.com|raw\.githubusercontent\.com"
+    r"|gist\.githubusercontent\.com)/)DippyCoder/", re.IGNORECASE)
+
+
+def github_candidates(url):
+    """[organisation URL, old URL] for a DippyCoder GitHub URL, else [url]."""
+    moved = _OLD_OWNER_RE.sub(lambda m: m.group(1) + GITHUB_ORG + "/", url, count=1)
+    return [moved, url] if moved != url else [url]
+
+
+def _with_fallback(url, fn):
+    """Runs fn(candidate) for each of github_candidates(url) until one works;
+    re-raises the last failure if none does."""
+    last = None
+    for candidate in github_candidates(url):
+        try:
+            return fn(candidate)
+        except Exception as e:
+            last = e
+    raise last
 
 
 def _open(url):
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    return urllib.request.urlopen(req, timeout=30)
+    def attempt(u):
+        req = urllib.request.Request(u, headers={"User-Agent": USER_AGENT})
+        return urllib.request.urlopen(req, timeout=30)
+    return _with_fallback(url, attempt)
 
 
 def post_json(url, payload):
     body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=body,
-        headers={"User-Agent": USER_AGENT, "Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=30) as res:
-        data = res.read().decode("utf-8", "replace")
+
+    def attempt(u):
+        req = urllib.request.Request(
+            u, data=body,
+            headers={"User-Agent": USER_AGENT, "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as res:
+            return res.read().decode("utf-8", "replace")
+    data = _with_fallback(url, attempt)
     try:
         return json.loads(data)
     except Exception:
@@ -61,6 +94,10 @@ def download_file(url, dest, on_progress=None):
     arrived completely, so a dropped connection never leaves a truncated jar
     where the server (or plugin loader) would pick it up — and never clobbers
     a previously working file."""
+    _with_fallback(url, lambda u: _download(u, dest, on_progress))
+
+
+def _download(url, dest, on_progress):
     import os
     tmp = dest + ".part"
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
