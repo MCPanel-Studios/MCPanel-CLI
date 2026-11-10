@@ -25,6 +25,7 @@ Every GitHub URL goes through http's MCPanel-Studios → DippyCoder fallback.
 import json
 import os
 import platform
+import re
 import shutil
 import site
 import subprocess
@@ -72,6 +73,44 @@ def _latest_release(product):
         raise CLIError("update_check_failed",
                        f"GitHub returned no {PRODUCTS[product]['name']} release.")
     return rel
+
+
+def _parse_app_version(v):
+    """MCPanel version "X.Y.Z" or "X.Y.Z-bN" → (X, Y, Z, N), N = inf for a full
+    release (a beta comes before its full release). None when unparsable."""
+    m = re.match(r"^v?(\d+)\.(\d+)\.(\d+)(?:-b(\d+))?$", str(v or "").strip(), re.I)
+    if not m:
+        return None
+    return (int(m[1]), int(m[2]), int(m[3]), int(m[4]) if m[4] is not None else float("inf"))
+
+
+def _mcpanel_release(current):
+    """The MCPanel release to update to: the newest full release, or on a beta
+    build also newer betas of that same version (2.4.1-b1 → 2.4.1-b2).
+    Mirrors pickAppRelease() in the desktop app's tauri-bridge.js."""
+    url = f"https://api.github.com/repos/DippyCoder/{PRODUCTS['mcpanel']['repo']}/releases?per_page=50"
+    try:
+        rels = http.fetch_json(url)
+    except Exception as e:
+        raise CLIError("update_check_failed", f"Could not fetch the MCPanel releases: {e}")
+    cur = _parse_app_version(current)
+    best, best_v = None, None
+    for r in rels if isinstance(rels, list) else []:
+        if not isinstance(r, dict) or r.get("draft") or not r.get("tag_name"):
+            continue
+        v = _parse_app_version(r["tag_name"])
+        if not v:
+            continue
+        if v[3] != float("inf"):
+            if not cur or cur[3] == float("inf") or v[:3] != cur[:3]:
+                continue
+        elif r.get("prerelease"):
+            continue
+        if best_v is None or v > best_v:
+            best, best_v = r, v
+    if not best:
+        raise CLIError("update_check_failed", "GitHub returned no MCPanel release.")
+    return best
 
 
 def _ver(tag):
@@ -281,9 +320,10 @@ def _desktop_target():
 
 def _update_mcpanel(progress):
     kind, current, detail = _desktop_target()
-    rel = _latest_release("mcpanel")
+    rel = _mcpanel_release(current)
     latest = _ver(rel["tag_name"])
-    if current and compare_versions(latest, current) <= 0:
+    lv, cv = _parse_app_version(latest), _parse_app_version(current)
+    if current and (lv <= cv if lv and cv else compare_versions(latest, current) <= 0):
         return _up_to_date("mcpanel", current, latest)
 
     suffix = {"nsis": "-setup.exe", "dmg": ".dmg", "appimage": ".AppImage",

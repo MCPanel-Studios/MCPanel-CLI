@@ -89,10 +89,10 @@ _NOUNS = {
 }
 
 _FLAGS = {
-    ("create",  "server"):   ["-t", "-ram", "-port", "-sw", "-v", "-profile", "-java", "-jargs", "-storage", "--unstable", "--accept-eula", "-dest"],
+    ("create",  "server"):   ["-t", "-ram", "-port", "-sw", "-v", "-profile", "-java", "-jargs", "-storage", "--unstable", "--accept-eula", "-dest", "-run"],
     ("create",  "profile"):  ["-t", "-desc", "-sw", "-versions"],
     ("create",  "profile-from-server"): ["-id", "-t", "-paths", "-desc", "-sw", "-versions"],
-    ("update",  "server"):   ["-id", "-t", "-ram", "-port", "-sw", "-v", "-java", "-jargs", "-storage"],
+    ("update",  "server"):   ["-id", "-t", "-ram", "-port", "-sw", "-v", "-java", "-jargs", "-storage", "-run"],
     ("start",   "server"):   ["-id", "--accept-eula"],
     ("stop",    "server"):   ["-id"],
     ("restart", "server"):   ["-id", "--accept-eula"],
@@ -112,7 +112,7 @@ _FLAGS = {
     ("files",   "server"):   ["-id"],
     ("stats",   "server"):   ["-id"],
     ("duplicate","server"):  ["-id", "-t", "-v", "-dest", "--unstable"],
-    ("import",  "server"):   ["-path", "-t", "-port", "-ram", "-sw", "-v", "-java", "-jargs"],
+    ("import",  "server"):   ["-path", "-t", "-port", "-ram", "-sw", "-v", "-java", "-jargs", "-run"],
     ("import",  "profile"):  ["-path", "-t", "-desc", "-sw", "-versions"],
     ("scan",    "server"):   ["-path"],
     ("scan",    "profile"):  ["-path"],
@@ -157,10 +157,10 @@ _POSITIONALS = {
 }
 
 _USAGE = {
-    ("create",  "server"):   "/create server -t <name> -sw <software> -v <version> [-ram <MB|nG>] [-port <n>] [-dest <folder>] [--accept-eula]",
+    ("create",  "server"):   "/create server -t <name> -sw <software> -v <version> [-run <file>] [-ram <MB|nG>] [-port <n>] [-dest <folder>] [--accept-eula]",
     ("create",  "profile"):  "/create profile -t <name> [-desc <text>] [-sw paper,purpur] [-versions 1.21,1.20]",
     ("create",  "profile-from-server"): "/create profile-from-server -id <id> -t <name> -paths <rel,paths>",
-    ("update",  "server"):   "/update server -id <id> [-t <name>] [-ram <MB>] [-port <n>] [-sw <sw>] [-v <ver>]",
+    ("update",  "server"):   "/update server -id <id> [-t <name>] [-ram <MB>] [-port <n>] [-sw <sw>] [-v <ver>] [-run <file>]",
     ("list",    "servers"):  "/list servers",
     ("list",    "profiles"): "/list profiles",
     ("ls",      "servers"):  "/ls servers",
@@ -185,7 +185,7 @@ _USAGE = {
     ("files",   "server"):   "/files server -id <id>",
     ("stats",   "server"):   "/stats server -id <id>",
     ("duplicate","server"):  "/duplicate server -id <id> -t <new name> [-v <version>] [-dest <folder>]",
-    ("import",  "server"):   "/import server -path <folder> -t <name> [-sw <sw>] [-v <ver>]",
+    ("import",  "server"):   "/import server -path <folder> -t <name> [-sw <sw>] [-v <ver>] [-run <file>]",
     ("import",  "profile"):  "/import profile -path <folder> -t <name>",
     ("scan",    "server"):   "/scan server -path <folder>",
     ("scan",    "profile"):  "/scan profile -path <folder>",
@@ -211,7 +211,7 @@ _USAGE = {
     ("proxy",   "link"):     "/proxy link [-id <id>] [--velocity-id <id>] [--server-name <name>] [--priority <pos>] [--custom-ip <ip:port>]",
     ("proxy",   "unlink"):   "/proxy unlink [-id <id>]",
     ("proxy",   "sync-port"): "/proxy sync-port [-id <id>] [--port <port>]",
-    ("versions",None):       "/versions -sw <paper|purpur|velocity|fabric|vanilla|leaf|folia|spigot> [--unstable] [--prerelease]",
+    ("versions",None):       "/versions -sw <paper|purpur|velocity|fabric|vanilla|leaf|folia|spigot|pumpkin> [--unstable] [--prerelease]",
     ("detect-jdk",None):     "/detect-jdk",
     ("system",  None):       "/system",
     ("version", None):       "/version",
@@ -426,7 +426,8 @@ class _Completer(Completer):
 
         # ── completing -sw argument value ──
         if prev in ("-sw", "--software"):
-            for sw in SOFTWARE:
+            from .util import CUSTOM_SOFTWARE
+            for sw in list(SOFTWARE) + list(CUSTOM_SOFTWARE):
                 yield Completion(sw, start_position=0)
             return
 
@@ -563,13 +564,21 @@ def _wizard_create_server(flags):
     if not name:
         return
 
-    sw_list = list(SOFTWARE)
+    from .util import CUSTOM_SOFTWARE, run_file_extensions
+    sw_list = list(SOFTWARE) + list(CUSTOM_SOFTWARE)
     sw = flags.get("software") or flags.get("sw")
     if not sw:
         sw = _pick("Select software:", sw_list)
 
+    run = flags.get("run")
+    if sw in CUSTOM_SOFTWARE and not run:
+        exts = ", ".join(run_file_extensions(sw))
+        run = _ask(f"Run file to copy into the server ({exts}, empty = add it later)") or None
+
     version = flags.get("version") or flags.get("v")
-    if not version:
+    if sw in CUSTOM_SOFTWARE:
+        version = version or "Custom"
+    elif not version:
         print(f"\n  Fetching {sw} versions...")
         from .versions import fetch_versions
         vdata = fetch_versions(sw)
@@ -603,7 +612,7 @@ def _wizard_create_server(flags):
     ns = types.SimpleNamespace(
         name=name, software=sw, version=version, ram=ram, port=port,
         profile=None, java=java, jargs=None, storage=None,
-        unstable=False, accept_eula=accept, dest=dest,
+        unstable=False, accept_eula=accept, dest=dest, run=run,
     )
     _pr("create-server", servers.create_server(ns))
 
@@ -739,6 +748,7 @@ def _wizard_update(flags):
         java=flags.get("java"),
         jargs=flags.get("jargs"),
         storage=flags.get("storage"),
+        run=flags.get("run"),
     )
     _pr("update-server", servers.update_server(ns))
 
@@ -1465,6 +1475,7 @@ def _dispatch(verb, noun, flags, pos=()):
                 version=flags.get("version") or flags.get("v"),
                 java=flags.get("java"),
                 jargs=flags.get("jargs"),
+                run=flags.get("run"),
             )
             _pr("import-server", servers.import_server(ns))
         elif noun == "profile":

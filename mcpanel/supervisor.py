@@ -17,9 +17,9 @@ import sys
 import threading
 import time
 
-from . import paths, runstate
+from . import paths, runstate, util
 from .config import load_config, find_server
-from .util import resolve_jar, build_java_command
+from .util import build_launch_command
 
 _USE_UNIX_SOCKET = runstate._USE_UNIX_SOCKET
 
@@ -44,6 +44,7 @@ class Supervisor:
         self.started = None
         self.tail = []
         self.owns_lock = False
+        self.tree = False
 
     # ─── logging ──────────────────────────────────────────────────────────
     def log(self, text, type_="out"):
@@ -118,7 +119,10 @@ class Supervisor:
                 return {"ok": False, "error": str(e)}
         if op == "kill":
             try:
-                self.proc.kill()
+                if self.tree:
+                    runstate.kill_tree(self.proc.pid)
+                else:
+                    self.proc.kill()
                 return {"ok": True}
             except Exception as e:
                 return {"ok": False, "error": str(e)}
@@ -216,10 +220,13 @@ class Supervisor:
         if not srv:
             self._boot_fail("Server not found")
             return
-        jar, err = resolve_jar(srv)
+        cmd, err = build_launch_command(srv)
         if err:
             self._boot_fail(err)
             return
+        # A start script runs java as its child: give it its own process group
+        # so a kill takes the whole tree, not just the shell in front of java.
+        self.tree = srv.get("software") in util.NATIVE_SOFTWARE
 
         # Socket first: if it can't be created there is no way to stop the
         # server later, so fail *before* java exists rather than orphaning it.
@@ -229,7 +236,6 @@ class Supervisor:
             self._boot_fail(str(e))
             return
 
-        cmd = build_java_command(srv, jar)
         runstate.rotate_log(self.id)
         self.log_file = open(runstate.log_path(self.id), "w", encoding="utf-8")
 
@@ -240,6 +246,8 @@ class Supervisor:
             # java.exe (a console-subsystem binary) without CREATE_NO_WINDOW makes
             # Windows allocate it a brand-new console window, even with stdio piped.
             popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        elif self.tree:
+            popen_kwargs["start_new_session"] = True
 
         try:
             self.proc = subprocess.Popen(
@@ -250,7 +258,8 @@ class Supervisor:
         except Exception as e:
             self._close_socket()
             runstate.cleanup_state(self.id)
-            self._boot_fail(f"Failed to launch java: {e}")
+            what = {"custom": "the run file", "pumpkin": "Pumpkin"}.get(srv.get("software"), "java")
+            self._boot_fail(f"Failed to launch {what}: {e}")
             return
 
         self.started = _now_ms()
@@ -259,6 +268,7 @@ class Supervisor:
         runstate.write_state(self.id, {
             "supervisorPid": os.getpid(), "javaPid": self.proc.pid,
             "port": srv.get("port"), "started": self.started,
+            "processTree": self.tree,
         })
         self._clear_boot_err()
 
@@ -266,6 +276,10 @@ class Supervisor:
         t_err = threading.Thread(target=self._pump, args=(self.proc.stderr, "err"), daemon=True)
         t_ctl = threading.Thread(target=self._serve_control, daemon=True)
         t_out.start(); t_err.start(); t_ctl.start()
+        if self.tree:
+            limit = util.ram_mb(util.normalize_ram(srv.get("ram")))
+            if limit:
+                threading.Thread(target=self._watch_memory, args=(limit,), daemon=True).start()
 
         code = self.proc.wait()
         t_out.join(timeout=2); t_err.join(timeout=2)
@@ -282,6 +296,23 @@ class Supervisor:
         # Teardown
         self._close_socket()
         runstate.cleanup_state(self.id)
+
+    def _watch_memory(self, limit_mb):
+        """A start script can't be given -Xmx, so a custom server's RAM limit
+        is enforced from outside: everything the script started is measured
+        and killed once it uses more than the limit."""
+        limit = limit_mb * 1048576
+        while self.proc is not None and self.proc.poll() is None:
+            used = runstate.tree_rss(self.proc.pid)
+            if used > limit:
+                self.log(f"[mcpanel] Memory limit exceeded ({used // 1048576} MB used, limit "
+                         f"{limit_mb} MB) - the server was stopped", "err")
+                try:
+                    runstate.kill_tree(self.proc.pid)
+                except Exception:
+                    pass
+                return
+            time.sleep(2)
 
     def _close_socket(self):
         self.stop_accept = True

@@ -163,7 +163,7 @@ _mcpanel_complete() {
 
   # software
   if [[ "$prev" == "-sw" || "$prev" == "--software" ]]; then
-    COMPREPLY=($(compgen -W "paper purpur folia leaf vanilla fabric velocity spigot" -- "$cur"))
+    COMPREPLY=($(compgen -W "paper purpur folia leaf vanilla fabric velocity spigot pumpkin custom custom-java" -- "$cur"))
     return
   fi
 
@@ -347,8 +347,10 @@ def f_server_create(p):
     f_heap(p)
     p.add_argument("-p", "-port", "--port", dest="port", type=int, default=25565, metavar="<port>")
     p.add_argument("-sw", "--software", dest="software", required=True, metavar="<software>",
-                   help="paper|purpur|velocity|fabric|vanilla|leaf|folia|spigot")
-    p.add_argument("-v", "--version", dest="version", required=True, metavar="<version>")
+                   help="paper|purpur|velocity|fabric|vanilla|leaf|folia|spigot|pumpkin|custom|custom-java")
+    p.add_argument("-v", "--version", dest="version", default=None, metavar="<version>",
+                   help="required, except for custom / custom-java")
+    f_run(p, "custom/custom-java: optional start script / executable or .jar to copy into the new server")
     p.add_argument("-profile", "--profile", dest="profile", default=None, metavar="<profileId>")
     p.add_argument("-java", "--java", dest="java", default=None, metavar="<path>")
     p.add_argument("-jargs", "--jargs", dest="jargs", default=None, metavar="<args>")
@@ -357,6 +359,10 @@ def f_server_create(p):
     p.add_argument("--unstable", dest="unstable", action="store_true", help="allow unstable/experimental builds")
     p.add_argument("--accept-eula", dest="accept_eula", action="store_true", help="write eula=true")
     f_dest(p)
+
+
+def f_run(p, help):
+    p.add_argument("-run", "--run", dest="run", default=None, metavar="<file>", help=help)
 
 
 def f_dest(p):
@@ -486,6 +492,7 @@ def add_commands(sub, api=False):
     p.add_argument("-java", "--java", dest="java", default=None)
     p.add_argument("-jargs", "--jargs", dest="jargs", default=None)
     p.add_argument("-storage", "--storage", dest="storage", default=None)
+    f_run(p, "custom/custom-java: run file, relative to the server folder (\"\" = auto-detect)")
     p.set_defaults(func=servers.update_server, action="update-server")
 
     # lifecycle (single-noun verbs) -------------------------------------
@@ -571,6 +578,7 @@ def add_commands(sub, api=False):
     p.add_argument("-v", "--version", dest="version", default=None)
     p.add_argument("-java", "--java", dest="java", default=None)
     p.add_argument("-jargs", "--jargs", dest="jargs", default=None)
+    f_run(p, "custom/custom-java: run file inside the folder (default: auto-detected)")
     p = leaf(imsub, "profile", profiles.import_profile, "import-profile")
     p.add_argument("-path", "--path", dest="path", required=True, metavar="<folder>")
     f_name(p)
@@ -665,7 +673,7 @@ def add_commands(sub, api=False):
         p.add_argument("-id", "--id", dest="id", default=None, metavar="<serverid>",
                        help="server id (used to auto-detect MC version)")
         p.add_argument("-v", "--mc-version", dest="mc_version", default=None, metavar="<MC version>")
-        p.add_argument("-sw", "--software", dest="software", default="paper", metavar="<software>")
+        p.add_argument("-sw", "--software", dest="software", default=None, metavar="<software>")
         p.add_argument("-n", "--limit", dest="limit", type=int, default=20, metavar="<N>")
         p.add_argument("-o", "--offset", dest="offset", type=int, default=0, metavar="<N>",
                        help="pagination offset (for loading more results)")

@@ -166,6 +166,124 @@ def purge(server_id):
                 pass
 
 
+def tree_pids(pid):
+    """`pid` and all its descendants (best effort, [] if it's gone)."""
+    pid = int(pid)
+    children = {}
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            class PROCESSENTRY32(ctypes.Structure):
+                _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                            ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_void_p),
+                            ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                            ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+                            ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_char * 260)]
+            k32 = ctypes.windll.kernel32
+            k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+            snap = k32.CreateToolhelp32Snapshot(0x2, 0)          # TH32CS_SNAPPROCESS
+            if snap in (None, wintypes.HANDLE(-1).value):
+                return [pid]
+            try:
+                e = PROCESSENTRY32()
+                e.dwSize = ctypes.sizeof(e)
+                ok = k32.Process32First(snap, ctypes.byref(e))
+                while ok:
+                    children.setdefault(e.th32ParentProcessID, []).append(e.th32ProcessID)
+                    ok = k32.Process32Next(snap, ctypes.byref(e))
+            finally:
+                k32.CloseHandle(snap)
+        elif os.path.isdir("/proc"):
+            for name in os.listdir("/proc"):
+                if not name.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{name}/stat", "r") as f:
+                        ppid = int(f.read().rpartition(")")[2].split()[1])
+                except (OSError, ValueError, IndexError):
+                    continue
+                children.setdefault(ppid, []).append(int(name))
+        else:
+            import subprocess
+            out = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True).stdout
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) == 2:
+                    children.setdefault(int(parts[1]), []).append(int(parts[0]))
+    except Exception:
+        return [pid]
+    out, todo, seen = [], [pid], set()
+    while todo:
+        p = todo.pop()
+        if p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+        todo.extend(children.get(p, []))
+    return out
+
+
+def process_rss(pid):
+    """Resident memory of one process in bytes, or None."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class PMC(ctypes.Structure):
+                _fields_ = [("cb", ctypes.c_ulong), ("PageFaultCount", ctypes.c_ulong),
+                            ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                            ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))  # QUERY_LIMITED_INFORMATION
+            if not handle:
+                return None
+            try:
+                pmc = PMC()
+                pmc.cb = ctypes.sizeof(pmc)
+                if not ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(pmc), pmc.cb):
+                    return None
+                return pmc.WorkingSetSize
+            finally:
+                ctypes.windll.kernel32.CloseHandle(handle)
+        if os.path.isdir("/proc"):
+            with open(f"/proc/{int(pid)}/statm", "r") as f:
+                return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+        import subprocess
+        out = subprocess.run(["ps", "-o", "rss=", "-p", str(int(pid))], capture_output=True, text=True).stdout
+        return int(out.strip()) * 1024 if out.strip() else None
+    except (OSError, ValueError):
+        return None
+
+
+def tree_rss(pid):
+    """Resident memory of `pid` and everything it started, in bytes."""
+    total = 0
+    for p in tree_pids(pid):
+        total += process_rss(p) or 0
+    return total
+
+
+def kill_tree(pid):
+    """Kill `pid` and everything it started. Used for custom servers, where
+    `pid` is a start script and java (or whatever it runs) is its child: the
+    script runs in its own session/process group on POSIX (see supervisor)."""
+    pid = int(pid)
+    if sys.platform == "win32":
+        import subprocess
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return
+    import signal
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        os.kill(pid, signal.SIGKILL)
+
+
 def kill_orphan(server_id):
     """Last resort for a java process whose supervisor died (e.g. kill -9):
     nothing is listening on the control socket any more, so signal java
@@ -177,7 +295,9 @@ def kill_orphan(server_id):
     if not _pid_alive(pid):
         return False
     try:
-        if sys.platform == "win32":
+        if st.get("processTree"):
+            kill_tree(pid)
+        elif sys.platform == "win32":
             import ctypes
             PROCESS_TERMINATE = 0x0001
             handle = ctypes.windll.kernel32.OpenProcess(PROCESS_TERMINATE, False, int(pid))

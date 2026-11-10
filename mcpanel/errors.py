@@ -46,6 +46,7 @@ CATALOG = {
     "command_failed": "The command could not be sent to the server.",
     "storage_limit_exceeded": "The server is over its storage limit.",
     "jar_not_found": "No usable server jar was found.",
+    "run_file_not_found": "The custom server's run file was not found.",
     "invalid_name": "A name is required.",
     "invalid_port": "The port must be between 1 and 65535.",
     "invalid_ram": "The RAM value is not valid - use megabytes (2048) or e.g. 4G.",
@@ -94,6 +95,7 @@ CATALOG = {
     # ── plugins / mods ───────────────────────────────────────────────────────
     "unknown_platform": "Unknown platform - use modrinth, hangar or spigotmc.",
     "install_target_required": "Choose a server (--id) or a profile (--profile-id) to install into.",
+    "plugins_unsupported": "Plugins and mods can't be managed for custom servers.",
     "plugin_unavailable": "That plugin or mod can't be downloaded automatically.",
     "plugin_not_installed": "That plugin or mod isn't installed (only ones installed through MCPanel are tracked).",
 

@@ -1,6 +1,7 @@
 """Plugin / Mod search and install via Modrinth, Hangar, and SpigotMC (Spiget)."""
 
 import os
+import re
 import sys
 from urllib.parse import quote
 
@@ -21,6 +22,30 @@ MODRINTH_LOADERS = {
     "leaf": ["paper", "purpur", "spigot", "bukkit"],
     "spigot": ["spigot", "bukkit"],
 }
+
+
+# Custom servers run whatever the user brought — MCPanel can't know what
+# loader (if any) is inside, so the plugin manager is off for them.
+NO_PLUGIN_SOFTWARES = {"custom", "custom-java", "pumpkin"}
+# Velocity plugins only exist on Modrinth and Hangar.
+SPIGOTMC_SOFTWARES_EXCLUDED = {"velocity"}
+
+
+def _hangar_platform(software):
+    return "VELOCITY" if software == "velocity" else "PAPER"
+
+
+def _mc_filter(software, mc_version):
+    """The Minecraft version to filter by. A Velocity server's "version" is
+    Velocity's own (3.4.0), which matches no Minecraft version."""
+    return None if software == "velocity" else mc_version
+
+
+def _check_platform(software, platform):
+    if software in NO_PLUGIN_SOFTWARES:
+        raise CLIError("plugins_unsupported", "Plugins and mods can't be managed for custom servers")
+    if platform == "spigotmc" and software in SPIGOTMC_SOFTWARES_EXCLUDED:
+        raise CLIError("unknown_platform", "SpigotMC has no Velocity plugins - use Modrinth or Hangar")
 
 
 def _dest_dir(software):
@@ -178,10 +203,10 @@ def get_modrinth_info(slug, limit=25, offset=0):
 
 # ─── Hangar ───────────────────────────────────────────────────────────────────
 
-def search_hangar(query, mc_version=None, limit=20, offset=0):
+def search_hangar(query, mc_version=None, limit=20, offset=0, software="paper"):
     url = (
         f"https://hangar.papermc.io/api/v1/projects"
-        f"?query={quote(query)}&platform=PAPER&limit={limit}&offset={offset}"
+        f"?query={quote(query)}&platform={_hangar_platform(software)}&limit={limit}&offset={offset}"
     )
     if mc_version:
         url += f"&version={quote(mc_version)}"
@@ -208,13 +233,14 @@ def search_hangar(query, mc_version=None, limit=20, offset=0):
     return results, has_more
 
 
-def get_hangar_download(slug, owner, mc_version=None, pin_version=None):
+def get_hangar_download(slug, owner, mc_version=None, pin_version=None, software="paper"):
+    hp = _hangar_platform(software)
     owner, slug = quote(owner, safe=""), quote(slug, safe="")
     base = f"https://hangar.papermc.io/api/v1/projects/{owner}/{slug}/versions"
     if pin_version:
         v = fetch_json(f"{base}/{quote(str(pin_version), safe='')}")
     else:
-        data = fetch_json(f"{base}?platform=PAPER&limit=1")
+        data = fetch_json(f"{base}?platform={hp}&limit=1")
         results = data.get("result", [])
         if not results:
             raise RuntimeError(f"No versions found for {slug} on Hangar")
@@ -222,10 +248,10 @@ def get_hangar_download(slug, owner, mc_version=None, pin_version=None):
     version = quote(str(v["name"]), safe="")
     dl_url = (
         f"https://hangar.papermc.io/api/v1/projects/{owner}/{slug}"
-        f"/versions/{version}/PAPER/download"
+        f"/versions/{version}/{hp}/download"
     )
     deps = []
-    for d in (v.get("pluginDependencies") or {}).get("PAPER") or []:
+    for d in (v.get("pluginDependencies") or {}).get(hp) or []:
         if not d.get("required"):
             continue
         # Dependencies hosted on Hangar carry a projectId; the rest only have
@@ -439,18 +465,25 @@ def search_plugins(args, progress=None):
     limit = getattr(args, "limit", 20)
     offset = getattr(args, "offset", 0) or 0
 
+    software = getattr(args, "software", None)
     cfg = load_config()
     if getattr(args, "id", None):
         srv = find_server(cfg, args.id)
         if srv:
             if not mc_version:
                 mc_version = srv.get("version")
+            software = software or srv.get("software")
+    software = software or "paper"
+    try:
+        _check_platform(software, _norm_platform(platform))
+    except CLIError as e:
+        return fail(e.code, str(e))
+    mc_version = _mc_filter(software, mc_version)
 
     if platform == "modrinth":
-        software = getattr(args, "software", "paper") or "paper"
         results, has_more = search_modrinth(query, software, mc_version, limit, offset)
     elif platform == "hangar":
-        results, has_more = search_hangar(query, mc_version, limit, offset)
+        results, has_more = search_hangar(query, mc_version, limit, offset, software)
     elif platform in ("spigotmc", "spiget"):
         results, has_more = search_spiget(query, limit, offset)
     else:
@@ -547,6 +580,9 @@ def _target(args):
             pass
     else:
         raise CLIError("install_target_required")
+    if software in NO_PLUGIN_SOFTWARES:
+        raise CLIError("plugins_unsupported", "Plugins and mods can't be managed for custom servers")
+    mc_version = _mc_filter(software, mc_version)
     dir_name = _dest_dir(software)
     return {"base": base, "software": software, "mcVersion": mc_version,
             "dir": os.path.join(base, dir_name), "dirName": dir_name}
@@ -555,6 +591,8 @@ def _target(args):
 def _resolve(platform, pid, software, mc_version, owner=None, pin=None):
     """Everything needed to download one project and record it: url,
     filename, id/owner/name, version/versionId and its raw required deps."""
+    _check_platform(software, platform)
+    mc_version = _mc_filter(software, mc_version)
     if platform == "modrinth":
         info = get_modrinth_version_download(pin) if pin else get_modrinth_download(pid, software, mc_version)
         info["id"], info["name"] = pid, pid
@@ -568,7 +606,7 @@ def _resolve(platform, pid, software, mc_version, owner=None, pin=None):
             pass
     elif platform == "hangar":
         owner, name = _hangar_owner_slug(pid, owner)
-        info = get_hangar_download(name, owner, mc_version, pin)
+        info = get_hangar_download(name, owner, mc_version, pin, software)
         info.update(id=name, owner=owner, name=name)
     elif platform == "spigotmc":
         info = get_spiget_download(pid, pin)
@@ -757,16 +795,74 @@ def install_plugin(args, progress=None):
 
 # ─── installed plugins: list / uninstall / update ────────────────────────────
 
+# Jars put into plugins/ or mods/ some other way (by hand, the file manager,
+# a profile) have no .list record. They're listed as platform "local": they
+# can be uninstalled, but MCPanel doesn't know where they came from, so they
+# can't be updated.
+LOCAL = "local"
+
+
+def _yml_value(text, key):
+    """A top-level `key: value` from plugin.yml, without a YAML parser."""
+    m = re.search(rf"^{key}:[ \t]*(.+?)[ \t]*$", text, re.M)
+    if not m:
+        return None
+    v = m.group(1).split(" #")[0].strip()
+    return v[1:-1] if len(v) > 1 and v[0] == v[-1] and v[0] in "'\"" else v or None
+
+
+def _jar_metadata(path):
+    """(name, version) from a plugin/mod jar's descriptor, or (None, None)."""
+    import json as _json
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+            for desc in ("paper-plugin.yml", "plugin.yml", "bungee.yml"):
+                if desc in names:
+                    text = z.read(desc).decode("utf-8", "replace")
+                    return _yml_value(text, "name"), _yml_value(text, "version")
+            for desc in ("velocity-plugin.json", "fabric.mod.json", "quilt.mod.json"):
+                if desc in names:
+                    d = _json.loads(z.read(desc).decode("utf-8", "replace"))
+                    if desc == "quilt.mod.json":
+                        ql = d.get("quilt_loader") or {}
+                        d = {**ql, **(ql.get("metadata") or {})}
+                    return d.get("name") or d.get("id"), d.get("version")
+    except Exception:
+        pass
+    return None, None
+
+
 def list_plugins(args, progress=None):
     target = _target(args)
     recs = pluginlist.load(target["dir"])
+    tracked = set()
     for r in recs:
         r["path"] = f"{target['dirName']}/{r['filename']}"
+        tracked.add(r["filename"])
+    try:
+        jars = sorted(f for f in os.listdir(target["dir"])
+                      if f.lower().endswith(".jar") and os.path.isfile(os.path.join(target["dir"], f)))
+    except OSError:
+        jars = []
+    for f in jars:
+        if f in tracked:
+            continue
+        name, version = _jar_metadata(os.path.join(target["dir"], f))
+        recs.append({"platform": LOCAL, "id": f, "filename": f, "name": name or os.path.splitext(f)[0],
+                     "version": version or "", "dependencies": [], "path": f"{target['dirName']}/{f}"})
     return {"kind": _kind(target["software"]), "dir": target["dirName"], "plugins": recs}
 
 
 def _installed_record(args, target):
     platform = _norm_platform(args.platform)
+    if platform == LOCAL:
+        fname = args.slug
+        if os.path.basename(fname) != fname or not fname.lower().endswith(".jar") \
+                or not os.path.isfile(os.path.join(target["dir"], fname)):
+            raise CLIError("plugin_not_installed", f"No {fname!r} in {target['dirName']}/")
+        return {"platform": LOCAL, "id": fname, "filename": fname, "name": fname}
     rec = pluginlist.find(pluginlist.load(target["dir"]), platform, args.slug)
     if not rec:
         raise CLIError("plugin_not_installed",
@@ -826,7 +922,11 @@ def update_plugin(args, progress=None):
                 "failed": [r for r in results if r.get("error")]}
     if not getattr(args, "platform", None) or not getattr(args, "slug", None):
         return fail("invalid_arguments", "Give <platform> <id> of the plugin/mod to update, or --all.")
-    result = _update_one(_installed_record(args, target), target, records, progress)
+    rec = _installed_record(args, target)
+    if rec["platform"] == LOCAL:
+        return fail("plugin_unavailable", f"{rec['filename']} wasn't installed through MCPanel, so it can't be "
+                                          "updated - it's unknown where it came from.")
+    result = _update_one(rec, target, records, progress)
     if result.get("error"):
         return fail("plugin_unavailable", result["error"], **{k: v for k, v in result.items() if k != "error"})
     if result.get("unchanged"):

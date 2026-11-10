@@ -17,6 +17,9 @@ import time
 from . import paths, runstate, buildtools
 from .config import load_config, locked_config, find_server, write_server_manifest
 from .versions import resolve_download_url, SOFTWARE
+from .util import CUSTOM_SOFTWARE
+
+ALL_SOFTWARE = list(SOFTWARE) + list(CUSTOM_SOFTWARE)
 from .http import download_file
 from .ping import ping_server
 from . import util
@@ -69,6 +72,51 @@ def _write_velocity_port(toml_file, port):
     util.atomic_write_text(toml_file, content)
 
 
+def _write_pumpkin_port(toml_file, port):
+    """Set address = "host:port" under [networking.java] in pumpkin.toml.
+    Pumpkin fills in every missing setting with its default on start, so a
+    file holding only this section is a complete config."""
+    content = _read_text(toml_file) or ""
+    lines = content.splitlines()
+    sec = _toml_section(lines, "networking.java")
+    if sec is None:
+        block = ["[networking.java]", f'address = "0.0.0.0:{port}"']
+        lines = (lines + [""] if lines and lines[-1].strip() else lines) + block
+    else:
+        start, end = sec
+        idx = next((i for i in range(start + 1, end) if re.match(r"^\s*address\s*=", lines[i])), None)
+        host = "0.0.0.0"
+        if idx is not None:
+            m = re.match(r'^\s*address\s*=\s*"(.*):\d+"', lines[idx])
+            if m:
+                host = m.group(1)
+            lines[idx] = f'address = "{host}:{port}"'
+        else:
+            lines.insert(start + 1, f'address = "{host}:{port}"')
+    util.atomic_write_text(toml_file, "\n".join(lines) + "\n")
+
+
+def _pumpkin_port(toml_file):
+    lines = (_read_text(toml_file) or "").splitlines()
+    sec = _toml_section(lines, "networking.java")
+    if sec is None:
+        return None
+    for line in lines[sec[0] + 1:sec[1]]:
+        m = re.match(r'^\s*address\s*=\s*"[^"]*:(\d+)"', line)
+        if m and util.is_valid_port(m.group(1)):
+            return int(m.group(1))
+    return None
+
+
+def _write_server_port(srv_dir, software, port):
+    if software == "velocity":
+        _write_velocity_port(os.path.join(srv_dir, "velocity.toml"), port)
+    elif software == "pumpkin":
+        _write_pumpkin_port(os.path.join(srv_dir, "pumpkin.toml"), port)
+    else:
+        _write_port(os.path.join(srv_dir, "server.properties"), port)
+
+
 def _invalid_id(value):
     return None if paths.is_valid_id(value) else fail("invalid_id", f"Invalid id: {value!r}")
 
@@ -92,10 +140,35 @@ def _validate_settings(port=None, ram=None, software=None, heap=None, ram_for_he
         if limit is not None and util.ram_mb(norm) > limit:
             return {"error": f"The heap limit ({norm}) can't be larger than the RAM limit - the heap is part of it",
                     "code": "invalid_ram"}
-    if software is not None and software not in SOFTWARE:
-        return {"error": f"Unknown software '{software}'. One of: {', '.join(SOFTWARE)}",
+    if software is not None and software not in ALL_SOFTWARE:
+        return {"error": f"Unknown software '{software}'. One of: {', '.join(ALL_SOFTWARE)}",
                 "code": "invalid_software"}
     return None
+
+
+def _check_run_file(software, path, server_dir=None):
+    """Error dict, or None when `path` is usable as `software`'s run file.
+    With `server_dir`, the file must be inside it (import copies the folder,
+    so a file elsewhere would be left behind)."""
+    exts = util.run_file_extensions(software)
+    if not os.path.isfile(path):
+        return fail("invalid_path", f"Run file not found: {path}")
+    if not path.lower().endswith(exts):
+        return fail("invalid_path", f"The run file must be one of: {', '.join(exts)}")
+    if server_dir and not util.is_inside(path, server_dir):
+        return fail("invalid_path", "The run file must be inside the server folder")
+    return None
+
+
+def _custom_version(software, java_path):
+    """The "version" shown for a custom server: the Java it runs on for
+    custom-java ("Java 25"), else just "Custom"."""
+    if software == "custom-java":
+        from .system import java_major
+        major = java_major(java_path)
+        if major:
+            return f"Java {major}"
+    return "Custom"
 
 
 def _remove_server_dir(server_dir):
@@ -175,10 +248,13 @@ def _install_jar(software, version, server_dir, progress=None, java_path="java",
     if progress:
         progress(0, "Resolving download URL...")
     url = resolve_download_url(software, version, unstable)
+    pumpkin = software == "pumpkin"
+    dest = os.path.join(server_dir, util.PUMPKIN_BINARY if pumpkin else "server.jar")
     if progress:
-        progress(0, "Downloading server jar...")
-    download_file(url, os.path.join(server_dir, "server.jar"),
-                  (lambda p: progress(p, f"Downloading... {p}%")) if progress else None)
+        progress(0, "Downloading Pumpkin..." if pumpkin else "Downloading server jar...")
+    download_file(url, dest, (lambda p: progress(p, f"Downloading... {p}%")) if progress else None)
+    if pumpkin and sys.platform != "win32":
+        os.chmod(dest, 0o755)
     return None
 
 
@@ -216,7 +292,16 @@ def create_server(args, progress=None):
         err = _validate_settings(port=args.port, ram=args.ram, software=software, heap=getattr(args, "heap", None))
         if err:
             return err
-        if not args.version:
+        custom = software in util.CUSTOM_SOFTWARE
+        run_src = os.path.abspath(os.path.expanduser(args.run)) if getattr(args, "run", None) else None
+        if custom and run_src:
+            # Nothing to download: the server is whatever file the user brings,
+            # copied into the new folder. Without one the folder starts empty and
+            # the run file is auto-detected at start (or picked in settings).
+            err = _check_run_file(software, run_src)
+            if err:
+                return err
+        if not custom and not args.version:
             return fail("version_required", "Version is required (-v)")
         if not (args.name or "").strip():
             return fail("invalid_name", "Name is required (-t)")
@@ -243,7 +328,7 @@ def create_server(args, progress=None):
             "heap": util.normalize_ram(args.heap) if getattr(args, "heap", None) else None,
             "storageLimit": args.storage or None,
             "software": software,
-            "version": args.version,
+            "version": args.version or (_custom_version(software, args.java or "java") if custom else None),
             "profileId": args.profile or None,
             "javaPath": args.java or "java",
             "javaArgs": args.jargs or util.default_java_args(),
@@ -258,8 +343,8 @@ def create_server(args, progress=None):
             if os.path.exists(profile_dir):
                 util.copy_dir(profile_dir, server_dir)
 
-        if software == "velocity":
-            _write_velocity_port(os.path.join(server_dir, "velocity.toml"), server["port"])
+        if software in ("velocity", "pumpkin"):
+            _write_server_port(server_dir, software, server["port"])
         else:
             props_file = os.path.join(server_dir, "server.properties")
             if not os.path.exists(props_file):
@@ -272,11 +357,18 @@ def create_server(args, progress=None):
             with open(os.path.join(server_dir, "eula.txt"), "w", encoding="utf-8") as f:
                 f.write("eula=true\n")
 
-        err = _install_jar(software, args.version, server_dir, progress,
-                           java_path=server["javaPath"], unstable=getattr(args, "unstable", False))
-        if err:
-            _discard_new_dir(server_dir, external)
-            return err
+        if custom:
+            if run_src:
+                if progress:
+                    progress(0, "Copying run file...")
+                shutil.copy2(run_src, os.path.join(server_dir, os.path.basename(run_src)))
+                server["runFile"] = os.path.basename(run_src)
+        else:
+            err = _install_jar(software, args.version, server_dir, progress,
+                               java_path=server["javaPath"], unstable=getattr(args, "unstable", False))
+            if err:
+                _discard_new_dir(server_dir, external)
+                return err
 
         # Re-read under the lock right before saving: the download above can
         # take minutes, and another command may have changed config.json since.
@@ -413,12 +505,30 @@ def update_server(args, progress=None):
             updates["software"] = args.software
         if args.version is not None:
             updates["version"] = args.version
+        elif updates.get("software", current.get("software")) == "custom-java" and (
+                args.java is not None or args.software is not None):
+            # Its "version" is the Java it runs on.
+            updates["version"] = _custom_version("custom-java", updates.get("javaPath", current.get("javaPath")))
         if args.java is not None:
             updates["javaPath"] = args.java
         if args.jargs is not None:
             updates["javaArgs"] = args.jargs
         if args.storage is not None:
             updates["storageLimit"] = args.storage or None
+        run = getattr(args, "run", None)
+        if run is not None:
+            if not run.strip():
+                updates["runFile"] = None          # "" = auto-detect again
+            else:
+                sw = updates.get("software", current.get("software"))
+                if sw not in util.CUSTOM_SOFTWARE:
+                    return fail("invalid_software", "Only custom servers have a run file")
+                path = os.path.expanduser(run.strip())
+                path = path if os.path.isabs(path) else os.path.join(current["dir"], path)
+                err = _check_run_file(sw, path)
+                if err:
+                    return err
+                updates["runFile"] = util.relative_run_file(current["dir"], path)
 
         with locked_config() as cfg:
             idx = next((i for i, s in enumerate(cfg.get("servers", [])) if s["id"] == args.id), -1)
@@ -430,10 +540,7 @@ def update_server(args, progress=None):
             # Written inside the lock: if this fails the exception skips the
             # config save, so config.json never claims a port the files don't have.
             if "port" in updates:
-                if server.get("software", "") == "velocity":
-                    _write_velocity_port(os.path.join(server["dir"], "velocity.toml"), updates["port"])
-                else:
-                    _write_port(os.path.join(server["dir"], "server.properties"), updates["port"])
+                _write_server_port(server["dir"], server.get("software", ""), updates["port"])
 
         write_server_manifest(server)
         return {"success": True, "server": server}
@@ -459,6 +566,8 @@ def duplicate_server(args, progress=None):
         version = (getattr(args, "version", None) or "").strip() or None
         if version == src.get("version"):
             version = None
+        if version and src.get("software") in util.CUSTOM_SOFTWARE:
+            return fail("invalid_software", "Can't switch versions of a custom server - MCPanel doesn't download it")
         if version and src.get("software") not in SOFTWARE:
             return fail("invalid_software",
                         f"Can't switch versions: unknown software '{src.get('software')}'")
@@ -487,7 +596,11 @@ def duplicate_server(args, progress=None):
         if version:
             # resolve_jar may have picked a custom-named jar; the new one is
             # always server.jar, which resolve_jar prefers, so drop the old one.
-            old_jar, _ = util.resolve_jar(new_server)
+            if src["software"] == "pumpkin":
+                old_jar = None
+                new_server.pop("runFile", None)
+            else:
+                old_jar, _ = util.resolve_jar(new_server)
             err = _install_jar(src["software"], version, new_dir, progress,
                                java_path=src.get("javaPath") or "java",
                                unstable=getattr(args, "unstable", False))
@@ -543,6 +656,25 @@ def import_server(args, progress=None):
         if err:
             return err
         detected = _scan_folder(src)
+        software = args.software or detected.get("software") or "paper"
+        run_rel = None
+        if software in util.CUSTOM_SOFTWARE:
+            run = getattr(args, "run", None)
+            if run:
+                path = os.path.expanduser(run)
+                path = path if os.path.isabs(path) else os.path.join(src, path)
+                err = _check_run_file(software, path, server_dir=src)
+                if err:
+                    return err
+                run_rel = os.path.relpath(os.path.abspath(path), src)
+            else:
+                # Optional: with none found, it is auto-detected at start.
+                found = util.find_run_files(src, software)
+                run_rel = found[0] if found else None
+        elif software == "pumpkin":
+            found = util.find_pumpkin_binaries(src)
+            if found and found[0] != util.PUMPKIN_BINARY:
+                run_rel = found[0]
         paths.ensure_dirs()
         sid = _unique_id("srv", paths.SERVERS_DIR)
         if link:
@@ -561,8 +693,10 @@ def import_server(args, progress=None):
             "port": int(args.port) if args.port else detected["port"],
             "ram": util.normalize_ram(args.ram) if args.ram else (detected.get("ram") or "2G"),
             "storageLimit": None,
-            "software": args.software or detected.get("software") or "paper",
-            "version": args.version or detected.get("version") or "Unknown",
+            "software": software,
+            "version": args.version or (_custom_version(software, args.java or "java")
+                                        if software in util.CUSTOM_SOFTWARE
+                                        else detected.get("version") or "Unknown"),
             "profileId": None,
             "javaPath": args.java or "java",
             "javaArgs": args.jargs or util.default_java_args(),
@@ -571,6 +705,8 @@ def import_server(args, progress=None):
         }
         if link:
             server["linked"] = True
+        if run_rel:
+            server["runFile"] = run_rel
         with locked_config() as cfg:
             cfg.setdefault("servers", []).append(server)
         write_server_manifest(server)
@@ -681,9 +817,10 @@ def start_server(args, progress=None):
                     return fail("storage_limit_exceeded", f"Storage limit exceeded: {used_mb} MB used, "
                                                           f"limit is {srv['storageLimit']}")
 
-        _, err = util.resolve_jar(srv)
+        _, err = util.build_launch_command(srv)
         if err:
-            return fail("jar_not_found", err)
+            return fail("run_file_not_found" if srv.get("software") in (*util.CUSTOM_SOFTWARE, "pumpkin")
+                    else "jar_not_found", err)
 
         result = _spawn_supervisor(srv["id"])
         if result.get("success"):
@@ -859,7 +996,7 @@ def _read_proc_cpu_seconds(pid):
         return None
 
 
-def _server_cpu_pct(server_id, pid):
+def _server_cpu_pct(server_id, pid, pids=None):
     """Percent of total machine CPU used by `pid` since the previous call.
 
     A CLI run is one-shot, so the prior sample (pid, cpu-seconds, wall-clock)
@@ -867,7 +1004,13 @@ def _server_cpu_pct(server_id, pid):
     by logical CPU count so it stays within 0..100, matching the system gauge.
     Returns 0.0 on the first sample (no baseline yet).
     """
-    proc_seconds = _read_proc_cpu_seconds(pid)
+    if pids:
+        # A process tree (custom server): processes that exited since the
+        # last sample drop out of the sum, so the delta is clamped at 0 below.
+        samples = [_read_proc_cpu_seconds(p) for p in pids]
+        proc_seconds = sum(x for x in samples if x is not None) if any(x is not None for x in samples) else None
+    else:
+        proc_seconds = _read_proc_cpu_seconds(pid)
     if proc_seconds is None:
         return None
     now = time.time()
@@ -896,6 +1039,14 @@ def _max_players(srv):
     """The player cap the server advertises: max-players in server.properties,
     or show-max-players in velocity.toml - or, before the first start has
     written that file, the default the server will use (20 / Velocity's 500)."""
+    if srv.get("software") == "pumpkin":
+        lines = (_read_text(os.path.join(srv["dir"], "pumpkin.toml")) or "").splitlines()
+        sec = _toml_section(lines, "networking.java")
+        for line in (lines[sec[0] + 1:sec[1]] if sec else []):
+            m = re.match(r"^\s*max_players\s*=\s*(\d+)", line)
+            if m:
+                return int(m.group(1))
+        return 1000
     if srv.get("software") == "velocity":
         path, pattern, default = (os.path.join(srv["dir"], "velocity.toml"),
                                   r"^\s*show-max-players\s*=\s*(\d+)", 500)
@@ -918,7 +1069,15 @@ def get_server_dir_stats(args, progress=None):
     st = runstate.read_state(srv["id"])
     if st:
         pid = st.get("javaPid")
-        if pid:
+        if pid and st.get("processTree"):
+            # Custom server: the root is a start script, the real server is
+            # its child - count everything the script started.
+            pids = runstate.tree_pids(pid)
+            cpu = _server_cpu_pct(srv["id"], pid, pids)
+            if cpu is not None:
+                result["cpuPct"] = cpu
+            result["ramBytes"] = sum(runstate.process_rss(p) or 0 for p in pids)
+        elif pid:
             cpu = _server_cpu_pct(srv["id"], pid)
             if cpu is not None:
                 result["cpuPct"] = cpu
@@ -1017,7 +1176,8 @@ def _scan_folder(folder):
     any MCPanel config: port, software, version, RAM, and whether it looks
     like a Minecraft server at all."""
     result = {"port": 25565, "software": None, "version": None, "ram": None,
-              "isServer": False, "hasMcpanelConfig": False, "jar": None}
+              "isServer": False, "hasMcpanelConfig": False, "jar": None,
+              "runFiles": [], "jars": []}
     if not os.path.isdir(folder):
         return result
     try:
@@ -1044,6 +1204,13 @@ def _scan_folder(folder):
                 result["port"] = int(m.group(1))
         except OSError:
             pass
+
+    pumpkin_bins = util.find_pumpkin_binaries(folder)
+    if "pumpkin.toml" in entries or pumpkin_bins:
+        port = _pumpkin_port(os.path.join(folder, "pumpkin.toml"))
+        result.update(software="pumpkin", isServer=True, jar=None,
+                      port=port or result["port"], runFiles=pumpkin_bins)
+        return result
 
     jars = sorted(e for e in entries if e.lower().endswith(".jar"))
     jar = "server.jar" if "server.jar" in entries else (jars[0] if len(jars) == 1 else None)
@@ -1103,8 +1270,20 @@ def _scan_folder(folder):
             except OSError:
                 pass
 
-    result["isServer"] = bool(jar) and bool(
-        {"server.properties", "eula.txt", "velocity.toml", "world"} & entries or result["software"])
+    # Candidates for the custom software types, best guess first — the UI
+    # offers them when "Custom" / "Custom Java" is picked.
+    result["runFiles"] = util.find_run_files(folder, "custom")
+    result["jars"] = util.find_run_files(folder, "custom-java")
+    # Forge / NeoForge (and other installers) boot through their own run
+    # script instead of a server jar; a folder with no jar at all but a start
+    # script is the same story.
+    modloader = has("libraries", "net", "minecraftforge") or has("libraries", "net", "neoforged")
+    if result["runFiles"] and (modloader or not jar):
+        result["software"] = "custom"
+
+    mc_files = {"server.properties", "eula.txt", "velocity.toml", "world"} & entries
+    result["isServer"] = (bool(jar) and bool(mc_files or result["software"])) or \
+        (result["software"] == "custom" and bool(mc_files or modloader))
     return result
 
 

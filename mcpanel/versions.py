@@ -3,7 +3,9 @@ software. Direct port of the version fetchers and resolveDownloadUrl in
 main.js."""
 
 import json
+import platform
 import re
+import sys
 
 from .http import fetch_json, fetch_text, post_json
 from .errors import fail, CLIError
@@ -22,7 +24,7 @@ def _papermc_versions(project, unstable=False):
         vs = [n["key"] for n in nodes if not _PRE_RE.search(n["key"])]
     return list(reversed(vs))
 
-SOFTWARE = ["paper", "purpur", "velocity", "fabric", "vanilla", "leaf", "folia", "spigot"]
+SOFTWARE = ["paper", "purpur", "velocity", "fabric", "vanilla", "leaf", "folia", "spigot", "pumpkin"]
 
 _PRE_RE = re.compile(r"-(pre|rc|alpha|beta|snapshot)\d*", re.I)
 
@@ -121,6 +123,41 @@ def fetch_folia_versions(unstable=False):
     return _papermc_versions("folia", unstable)
 
 
+_PUMPKIN_RELEASES = "https://api.github.com/repos/Pumpkin-MC/Pumpkin/releases?per_page=50"
+
+
+def pumpkin_asset_name():
+    """Name of the Pumpkin release binary for this OS and CPU, or None."""
+    machine = platform.machine().lower()
+    arch = "ARM64" if machine in ("arm64", "aarch64") else "X64" if machine in ("x86_64", "amd64") else None
+    if not arch:
+        return None
+    if sys.platform == "win32":
+        return f"pumpkin-{arch}-Windows.exe"
+    if sys.platform == "darwin":
+        return f"pumpkin-{arch}-macOS"
+    if sys.platform.startswith("linux"):
+        return f"pumpkin-{arch}-Linux"
+    return None
+
+
+def _pumpkin_releases(unstable):
+    asset = pumpkin_asset_name()
+    if not asset:
+        raise RuntimeError(f"Pumpkin has no build for this system ({sys.platform}, {platform.machine()})")
+    out = []
+    for r in fetch_json(_PUMPKIN_RELEASES):
+        if r.get("draft") or (r.get("prerelease") and not unstable):
+            continue
+        if any(a["name"] == asset for a in r.get("assets", [])):
+            out.append(r)
+    return out
+
+
+def fetch_pumpkin_versions(unstable=False):
+    return [r["tag_name"] for r in _pumpkin_releases(unstable)]
+
+
 def fetch_versions(software, pre_release=False, unstable=False):
     """Returns {'versions': [...]} or {'error': msg} — matches fetch-versions IPC."""
     fetchers = {
@@ -132,6 +169,7 @@ def fetch_versions(software, pre_release=False, unstable=False):
         "leaf": lambda: fetch_leaf_versions(unstable),
         "folia": lambda: fetch_folia_versions(unstable),
         "spigot": lambda: fetch_spigot_versions(),
+        "pumpkin": lambda: fetch_pumpkin_versions(unstable or pre_release),
     }
     if software not in fetchers:
         return fail("invalid_software", f"Unknown software '{software}'")
@@ -194,6 +232,12 @@ def resolve_download_url(software, version, unstable=False):
         if not jar:
             raise RuntimeError(f"No JAR asset found for Leaf {version}")
         return jar["browser_download_url"]
+    if software == "pumpkin":
+        asset = pumpkin_asset_name()
+        if not asset:
+            raise RuntimeError(f"Pumpkin has no build for this system ({sys.platform}, {platform.machine()})")
+        from urllib.parse import quote
+        return f"https://github.com/Pumpkin-MC/Pumpkin/releases/download/{quote(str(version), safe='')}/{asset}"
     if software == "spigot":
         raise RuntimeError("Spigot requires BuildTools. Download from "
                            "https://www.spigotmc.org/wiki/buildtools/")

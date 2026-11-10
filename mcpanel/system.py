@@ -112,6 +112,18 @@ def detect_jdk():
     return found
 
 
+def java_major(java_path):
+    """Feature version (25, 21, 8, …) of a java executable, or None."""
+    kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+    try:
+        out = subprocess.run([java_path or _java_exe(), "-version"], capture_output=True,
+                             text=True, timeout=10, **kwargs)
+    except Exception:
+        return None
+    m = re.search(r'version "([^"]+)"', (out.stderr or "") + (out.stdout or ""))
+    return _feature_version(m.group(1)) if m else None
+
+
 def _feature_version(version_str):
     """Parse a `java -version` string into a single feature-version int.
     Handles both modern ("17.0.9", "25.0.3") and legacy ("1.8.0_392") forms."""
@@ -172,7 +184,7 @@ def required_java_range(software, version):
         if software == "spigot":
             from . import buildtools
             return buildtools.required_java_range(version)
-        if software == "velocity":
+        if software in ("velocity", "pumpkin"):
             return None
         manifest = fetch_json("https://launchermeta.mojang.com/mc/game/version_manifest_v2.json")
         info = next((v for v in manifest["versions"] if v["id"] == version), None)
@@ -262,7 +274,10 @@ def get_system_info():
         total_storage = usage.total
     except Exception:
         pass
-    return {"totalRam": total_ram, "availableStorage": available_storage, "totalStorage": total_storage}
+    from .util import CUSTOM_SOFTWARE, run_file_extensions
+    return {"totalRam": total_ram, "availableStorage": available_storage, "totalStorage": total_storage,
+            # Run file types a custom server can use on this machine's OS.
+            "runFileTypes": {sw: list(run_file_extensions(sw)) for sw in CUSTOM_SOFTWARE}}
 
 
 def get_version():
